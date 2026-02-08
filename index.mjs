@@ -20,12 +20,44 @@ client.on("messageCreate", async (message) => {
   try {
     if (message.author.bot) return;
 
+
+const text = message.content.toLowerCase().trim();
+
+if (/^bruh+h*$/.test(text)) {
+  await message.reply("bruh indeed 😭");
+  return;
+}
+
+
     // reply only when MisfitBot is mentioned
     if (!message.mentions.has(client.user)) return;
 
-    const prompt = message.content
-      .replace(new RegExp(`<@!?${client.user.id}>`, "g"), "")
-      .trim();
+    // Remove bot mention from the user's message
+const userText = message.content
+  .replace(new RegExp(`<@!?${client.user.id}>`, "g"), "")
+  .trim();
+
+// If the user is replying to another message, fetch it and include it
+let referencedText = "";
+if (message.reference?.messageId) {
+  try {
+    const repliedMsg = await message.channel.messages.fetch(message.reference.messageId);
+    if (repliedMsg?.content) referencedText = repliedMsg.content.trim();
+  } catch (e) {
+    console.error("Could not fetch replied message:", e);
+  }
+}
+
+// Build final prompt
+const prompt = referencedText
+  ? `Message being replied to:\n\n${referencedText}\n\nUser request:\n${userText}`
+  : userText;
+
+if (!prompt) {
+  await message.reply("Tag me with a question 🙂");
+  return;
+}
+
 
     if (!prompt) {
       await message.reply("Tag me with a question 🙂");
