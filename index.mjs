@@ -1,6 +1,26 @@
 import "dotenv/config";
 import { Client, GatewayIntentBits } from "discord.js";
 import OpenAI from "openai";
+import fs from "fs";
+import Database from "better-sqlite3";
+const OWNER_ID = "1417834414368362596";
+
+// Render persistent disk path
+const DB_PATH = process.env.RENDER ? "/var/data/misfitbot.sqlite" : "./misfitbot.sqlite";
+const db = new Database(DB_PATH);
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS user_memory (
+    user_id TEXT PRIMARY KEY,
+    notes TEXT NOT NULL DEFAULT ''
+  );
+`);
+
+const FIXED_MEMORY = fs.existsSync("./fixed_memory.txt")
+  ? fs.readFileSync("./fixed_memory.txt", "utf8")
+  : "";
+
+
 
 const client = new Client({
   intents: [
@@ -19,6 +39,7 @@ client.once("ready", () => {
 client.on("messageCreate", async (message) => {
   try {
     if (message.author.bot) return;
+const isOwner = message.author.id === OWNER_ID;
 
 
 const text = message.content.toLowerCase().trim();
@@ -36,6 +57,55 @@ if (/^bruh+h*$/.test(text)) {
 const userText = message.content
   .replace(new RegExp(`<@!?${client.user.id}>`, "g"), "")
   .trim();
+
+// OWNER-ONLY MEMORY COMMANDS
+// @MisfitBot mem set @User <notes>
+// @MisfitBot mem show @User
+// @MisfitBot mem forget @User
+
+const setMatch = userText.match(/^mem\s+set\s+<@!?(\d+)>\s+(.+)$/i);
+if (setMatch) {
+  if (!isOwner) {
+    await message.reply("Nice try. Only Snooty can edit memory 😌");
+    return;
+  }
+  const targetId = setMatch[1];
+  const notes = setMatch[2].trim();
+
+  db.prepare(`
+    INSERT INTO user_memory (user_id, notes)
+    VALUES (?, ?)
+    ON CONFLICT(user_id) DO UPDATE SET notes = excluded.notes
+  `).run(targetId, notes);
+
+  await message.reply(`Got it. I’ll remember that about <@${targetId}> 🧠`);
+  return;
+}
+
+const showMatch = userText.match(/^mem\s+show\s+<@!?(\d+)>$/i);
+if (showMatch) {
+  if (!isOwner) {
+    await message.reply("Only Snooty can view other people’s memory 😌");
+    return;
+  }
+  const targetId = showMatch[1];
+  const row = db.prepare(`SELECT notes FROM user_memory WHERE user_id = ?`).get(targetId);
+  await message.reply(row?.notes ? `Memory for <@${targetId}>:\n${row.notes}` : `I have nothing stored for <@${targetId}> yet.`);
+  return;
+}
+
+const forgetMatch = userText.match(/^mem\s+forget\s+<@!?(\d+)>$/i);
+if (forgetMatch) {
+  if (!isOwner) {
+    await message.reply("Only Snooty can wipe memory 😈");
+    return;
+  }
+  const targetId = forgetMatch[1];
+  db.prepare(`DELETE FROM user_memory WHERE user_id = ?`).run(targetId);
+  await message.reply(`Memory wiped for <@${targetId}> 🧽`);
+  return;
+}
+
 
 // If the user is replying to another message, fetch it and include it
 let referencedText = "";
@@ -63,6 +133,22 @@ if (!prompt) {
       await message.reply("Tag me with a question 🙂");
       return;
     }
+
+{
+  role: "system",
+  content: `
+You are MisfitBot in the Midnight Misfits Discord server.
+
+FIXED MEMORY (immutable):
+${FIXED_MEMORY}
+
+USER MEMORY (about the current user only):
+${askerMemory ? askerMemory : "(none)"}
+
+Be witty and slightly sassy, but helpful. Never mention OpenAI or that you're an AI.
+`
+}
+
 
     await message.channel.sendTyping();
 
