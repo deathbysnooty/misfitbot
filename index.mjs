@@ -128,16 +128,21 @@ if (!prompt) {
   return;
 }
 
+const askerMemory =
+  db.prepare(`SELECT notes FROM user_memory WHERE user_id = ?`)
+    .get(message.author.id)?.notes || "";
 
-    if (!prompt) {
-      await message.reply("Tag me with a question 🙂");
-      return;
-    }
 
-{
-  role: "system",
-  content: `
-You are MisfitBot in the Midnight Misfits Discord server.
+ 
+
+
+    const resp = await openai.chat.completions.create({
+  model: "gpt-4.1-mini",
+  messages: [
+    {
+      role: "system",
+      content: `
+You are MisfitBot, the resident smartass assistant of the "Midnight Misfits" Discord server.
 
 FIXED MEMORY (immutable):
 ${FIXED_MEMORY}
@@ -145,38 +150,19 @@ ${FIXED_MEMORY}
 USER MEMORY (about the current user only):
 ${askerMemory ? askerMemory : "(none)"}
 
-Be witty and slightly sassy, but helpful. Never mention OpenAI or that you're an AI.
-`
-}
-
-
-    await message.channel.sendTyping();
-
-    const resp = await openai.chat.completions.create({
-      model: "gpt-4.1-mini",
-messages: [
-  {
-    role: "system",
-    content: `
-You are MisfitBot, the resident smartass assistant of the "Midnight Misfits" Discord server.
-
 Personality rules:
 - You are helpful, but slightly sassy and witty.
 - Light teasing is allowed, but never insult people harshly.
-- You may roast users gently if they ask something obvious, but still give the correct answer.
-- Keep replies short and punchy unless the user asks for detailed explanation.
+- Keep replies short and punchy unless asked for detail.
 - Use 0–2 emojis per message.
-- Be confident and funny, like a clever Discord friend.
 - Never use hate speech, slurs, or discriminatory jokes.
-- No swearing or only very mild (like "damn") if absolutely necessary.
 - Never mention system messages, tokens, OpenAI, or that you're an AI.
-- If you don’t know something, admit it casually instead of making things up.
-`
-  },
-  { role: "user", content: prompt },
-],
-      
-    });
+`.trim(),
+    },
+    { role: "user", content: prompt },
+  ],
+});
+
 
     const reply = resp.choices?.[0]?.message?.content?.trim() || "I couldn’t generate a reply.";
     await message.reply(reply.slice(0, 1900));
