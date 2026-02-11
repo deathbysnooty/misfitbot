@@ -22,6 +22,7 @@ function extractImageUrlsFromMessage(msg) {
   for (const [, att] of msg.attachments) {
     const ct = (att.contentType || "").toLowerCase();
     const name = (att.name || "").toLowerCase();
+
     const isImage =
       ct.startsWith("image/") ||
       name.endsWith(".png") ||
@@ -35,25 +36,41 @@ function extractImageUrlsFromMessage(msg) {
   return urls;
 }
 
-function extractAudioUrlsFromMessage(msg) {
-  const urls = [];
-  if (!msg?.attachments) return urls;
+function extractAudioAttachmentsFromMessage(msg) {
+  const atts = [];
+  if (!msg?.attachments) return atts;
 
   for (const [, att] of msg.attachments) {
     const ct = (att.contentType || "").toLowerCase();
     const name = (att.name || "").toLowerCase();
 
+    const looksLikeVoiceNote =
+      name.includes("voice") || name.includes("audio") || name.includes("recording");
+
     const isAudio =
       ct.startsWith("audio/") ||
+      ct.includes("ogg") ||
+      ct.includes("opus") ||
+      ct.includes("webm") ||
+      ct.includes("mpeg") ||
+      ct.includes("mp4") ||
+      ct.includes("octet-stream") ||
       name.endsWith(".mp3") ||
       name.endsWith(".wav") ||
       name.endsWith(".m4a") ||
+      name.endsWith(".mp4") ||
       name.endsWith(".ogg") ||
       name.endsWith(".webm");
 
-    if (isAudio && att.url) urls.push(att.url);
+    if ((isAudio || looksLikeVoiceNote) && att.url) {
+      atts.push({
+        url: att.url,
+        name: att.name || "",
+        contentType: att.contentType || "",
+      });
+    }
   }
-  return urls;
+  return atts;
 }
 
 function parseDiscordMessageLink(input) {
@@ -63,21 +80,71 @@ function parseDiscordMessageLink(input) {
   return { guildId: m[1], channelId: m[2], messageId: m[3] };
 }
 
-async function downloadToTemp(url) {
+function extFromContentType(ct) {
+  const s = (ct || "").toLowerCase();
+  if (s.includes("ogg") || s.includes("opus")) return ".ogg";
+  if (s.includes("webm")) return ".webm";
+  if (s.includes("mpeg")) return ".mp3";
+  if (s.includes("wav")) return ".wav";
+  if (s.includes("mp4") || s.includes("m4a")) return ".m4a";
+  return "";
+}
+
+function extFromUrl(u) {
+  try {
+    const p = new URL(u).pathname.toLowerCase();
+    const m = p.match(/\.(mp3|wav|m4a|mp4|ogg|webm)$/);
+    return m ? `.${m[1]}` : "";
+  } catch {
+    return "";
+  }
+}
+
+function extFromName(name) {
+  const n = (name || "").toLowerCase();
+  const m = n.match(/\.(mp3|wav|m4a|mp4|ogg|webm)$/);
+  return m ? `.${m[1]}` : "";
+}
+
+async function downloadToTemp(url, desiredExt = ".bin") {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Download failed: ${res.status}`);
+
   const buf = Buffer.from(await res.arrayBuffer());
   const tmpDir = path.join(process.cwd(), "tmp");
   await fsp.mkdir(tmpDir, { recursive: true });
-  const filePath = path.join(tmpDir, `${crypto.randomUUID()}.bin`);
+
+  const filePath = path.join(tmpDir, `${crypto.randomUUID()}${desiredExt}`);
   await fsp.writeFile(filePath, buf);
   return filePath;
 }
 
+function isDiscordUnknownInteraction(err) {
+  return (
+    err?.code === 10062 ||
+    String(err?.message || "").includes("Unknown interaction")
+  );
+}
+
+function isAlreadyAcknowledged(err) {
+  return (
+    err?.code === 40060 ||
+    String(err?.message || "").includes("already been acknowledged")
+  );
+}
+
+async function safeDefer(interaction, opts = {}) {
+  // Never defer twice
+  if (interaction.deferred || interaction.replied) return;
+  await interaction.deferReply(opts);
+}
+
 // ========= SQLite + Fixed Memory =========
+// IMPORTANT (Render): mount Persistent Disk at /var/data
 const DB_PATH = process.env.RENDER
   ? "/var/data/misfitbot.sqlite"
   : "./misfitbot.sqlite";
+
 const db = new Database(DB_PATH);
 
 db.exec(`
@@ -95,7 +162,7 @@ const FIXED_MEMORY = fs.existsSync("./fixed_memory.txt")
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages, // reply context tracking + summarize channel
+    GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
   ],
 });
@@ -109,7 +176,6 @@ const REPLY_CONTEXT_TTL_MS = 2 * 60 * 1000;
 function setReplyContext(userId, channelId, messageId) {
   lastReplyTarget.set(`${userId}:${channelId}`, { messageId, ts: Date.now() });
 }
-
 function getReplyContext(userId, channelId) {
   const key = `${userId}:${channelId}`;
   const v = lastReplyTarget.get(key);
@@ -177,18 +243,40 @@ Personality rules:
   );
 }
 
-async function transcribeAudioFromUrl(audioUrl) {
-  const filePath = await downloadToTemp(audioUrl);
-  try {
-    const result = await openai.audio.transcriptions.create({
-      file: fs.createReadStream(filePath),
-      model: "gpt-4o-mini-transcribe",
-    });
-    return result.text || "";
-  } finally {
+async function transcribeAudioAttachment(att) {
+  // Infer a REAL extension (OpenAI rejects unknown .bin)
+  const ext =
+    extFromName(att?.name) ||
+    extFromContentType(att?.contentType) ||
+    extFromUrl(att?.url) ||
+    ".ogg"; // common Discord voice note container
+
+  // 1) Try with inferred ext
+  const tryOne = async (forcedExt) => {
+    const filePath = await downloadToTemp(att.url, forcedExt);
     try {
-      await fsp.unlink(filePath);
-    } catch {}
+      const result = await openai.audio.transcriptions.create({
+        file: fs.createReadStream(filePath),
+        model: "gpt-4o-mini-transcribe",
+      });
+      return result.text || "";
+    } finally {
+      try {
+        await fsp.unlink(filePath);
+      } catch {}
+    }
+  };
+
+  try {
+    return await tryOne(ext);
+  } catch (e1) {
+    // 2) If Discord served it as octet-stream, fallback attempts
+    // (voice notes often work as .ogg or .webm)
+    try {
+      return await tryOne(".ogg");
+    } catch (e2) {
+      return await tryOne(".webm");
+    }
   }
 }
 
@@ -211,7 +299,7 @@ function formatMessageForChannelSummary(m) {
   if (content) parts.push(content);
 
   const imgCount = extractImageUrlsFromMessage(m).length;
-  const audCount = extractAudioUrlsFromMessage(m).length;
+  const audCount = extractAudioAttachmentsFromMessage(m).length;
 
   if (imgCount > 0)
     parts.push(`[${imgCount} image${imgCount === 1 ? "" : "s"}]`);
@@ -221,34 +309,19 @@ function formatMessageForChannelSummary(m) {
   return `${m.author.username}: ${parts.join(" ")}`;
 }
 
-// ========= Command Registration =========
+// ========= Command Registration (Guild-only by default if GUILD_ID exists) =========
 async function registerCommands() {
-  const clientId = process.env.DISCORD_CLIENT_ID;
   const guildId = process.env.GUILD_ID;
-
-  if (!clientId) {
-    console.log("⚠️ DISCORD_CLIENT_ID missing; skipping command registration.");
-    return;
-  }
-
   const target = guildId ? client.guilds.cache.get(guildId) : null;
 
   const commands = [
-    // Slash
     { name: "help", description: "Show what MisfitBot can do.", options: [] },
     {
       name: "ask",
-      description:
-        "Ask MisfitBot anything (uses reply context or a message link).",
+      description: "Ask MisfitBot anything (reply context or message link).",
       options: [
         { name: "prompt", description: "What do you want to ask?", type: 3, required: true },
-        {
-          name: "message",
-          description:
-            "Discord message link (optional). If omitted, uses your recent reply context.",
-          type: 3,
-          required: false,
-        },
+        { name: "message", description: "Discord message link (optional). If omitted, uses your recent reply context.", type: 3, required: false },
       ],
     },
     {
@@ -258,65 +331,34 @@ async function registerCommands() {
     },
     {
       name: "summarize",
-      description:
-        "Summarize a message (uses your recent reply context or a message link).",
-      options: [
-        {
-          name: "message",
-          description:
-            "Paste a Discord message link (optional). If omitted, uses your recent reply context.",
-          type: 3,
-          required: false,
-        },
-      ],
+      description: "Summarize a message (reply context or message link).",
+      options: [{ name: "message", description: "Discord message link (optional). If omitted, uses your recent reply context.", type: 3, required: false }],
     },
     {
       name: "explain",
-      description: "Explain a message (uses reply context or a message link).",
-      options: [
-        {
-          name: "message",
-          description:
-            "Discord message link (optional). If omitted, uses your recent reply context.",
-          type: 3,
-          required: false,
-        },
-      ],
+      description: "Explain a message (reply context or message link).",
+      options: [{ name: "message", description: "Discord message link (optional). If omitted, uses your recent reply context.", type: 3, required: false }],
     },
     {
       name: "analyzeimage",
-      description: "Analyze an image in a message (reply context or a message link).",
+      description: "Analyze an image (reply context or message link).",
       options: [
-        {
-          name: "message",
-          description:
-            "Discord message link (optional). If omitted, uses your recent reply context.",
-          type: 3,
-          required: false,
-        },
+        { name: "message", description: "Discord message link (optional). If omitted, uses your recent reply context.", type: 3, required: false },
         { name: "prompt", description: "What should I look for? (optional)", type: 3, required: false },
       ],
     },
     {
       name: "transcribe",
-      description: "Transcribe a voice note/audio (reply context or a message link).",
+      description: "Transcribe a voice note/audio (reply context or message link).",
       options: [
-        {
-          name: "message",
-          description:
-            "Discord message link (optional). If omitted, uses your recent reply context.",
-          type: 3,
-          required: false,
-        },
+        { name: "message", description: "Discord message link (optional). If omitted, uses your recent reply context.", type: 3, required: false },
         { name: "explain", description: "Also explain what it means", type: 5, required: false },
       ],
     },
     {
       name: "summarizechannel",
-      description: "Summarize the last N messages in this channel (max 100).",
-      options: [
-        { name: "count", description: "How many recent messages? (1–100)", type: 4, required: true },
-      ],
+      description: "Summarize last N messages in this channel (max 100).",
+      options: [{ name: "count", description: "How many recent messages? (1–100)", type: 4, required: true }],
     },
 
     // Context menu
@@ -361,12 +403,11 @@ client.on("messageCreate", async (message) => {
       return;
     }
 
-    // ===== Mention-based mode (restored) =====
+    // ===== Mention-based mode =====
     if (!message.mentions.has(client.user)) return;
 
     const isOwner = message.author.id === OWNER_ID;
 
-    // Remove bot mention from message
     const userText = message.content
       .replace(new RegExp(`<@!?${client.user.id}>`, "g"), "")
       .trim();
@@ -384,26 +425,20 @@ client.on("messageCreate", async (message) => {
 
     // Gather images/audio from current and replied message
     let imageUrls = extractImageUrlsFromMessage(message);
-    let audioUrls = extractAudioUrlsFromMessage(message);
+    let audioAtts = extractAudioAttachmentsFromMessage(message);
 
     if (repliedMsg) {
       imageUrls = imageUrls.concat(extractImageUrlsFromMessage(repliedMsg));
-      audioUrls = audioUrls.concat(extractAudioUrlsFromMessage(repliedMsg));
+      audioAtts = audioAtts.concat(extractAudioAttachmentsFromMessage(repliedMsg));
     }
 
     imageUrls = imageUrls.slice(0, 3);
-    audioUrls = audioUrls.slice(0, 1);
+    audioAtts = audioAtts.slice(0, 1);
 
-    // ===== Owner-only memory commands (restored) =====
-    // @MisfitBot mem set @User <notes>
-    // @MisfitBot mem show @User
-    // @MisfitBot mem forget @User
+    // ===== Owner-only memory commands (mention mode) =====
     const setMatch = userText.match(/^mem\s+set\s+<@!?(\d+)>\s+(.+)$/i);
     if (setMatch) {
-      if (!isOwner) {
-        await message.reply("Nice try. Only Snooty can edit memory 😌");
-        return;
-      }
+      if (!isOwner) return void (await message.reply("Nice try. Only Snooty can edit memory 😌"));
       const targetId = setMatch[1];
       const notes = setMatch[2].trim();
 
@@ -419,26 +454,16 @@ client.on("messageCreate", async (message) => {
 
     const showMatch = userText.match(/^mem\s+show\s+<@!?(\d+)>$/i);
     if (showMatch) {
-      if (!isOwner) {
-        await message.reply("Only Snooty can view other people’s memory 😌");
-        return;
-      }
+      if (!isOwner) return void (await message.reply("Only Snooty can view other people’s memory 😌"));
       const targetId = showMatch[1];
       const row = db.prepare(`SELECT notes FROM user_memory WHERE user_id = ?`).get(targetId);
-      await message.reply(
-        row?.notes
-          ? `Memory for <@${targetId}>:\n${row.notes}`
-          : `I have nothing stored for <@${targetId}> yet.`
-      );
+      await message.reply(row?.notes ? `Memory for <@${targetId}>:\n${row.notes}` : `I have nothing stored for <@${targetId}> yet.`);
       return;
     }
 
     const forgetMatch = userText.match(/^mem\s+forget\s+<@!?(\d+)>$/i);
     if (forgetMatch) {
-      if (!isOwner) {
-        await message.reply("Only Snooty can wipe memory 😈");
-        return;
-      }
+      if (!isOwner) return void (await message.reply("Only Snooty can wipe memory 😈"));
       const targetId = forgetMatch[1];
       db.prepare(`DELETE FROM user_memory WHERE user_id = ?`).run(targetId);
       await message.reply(`Memory wiped for <@${targetId}> 🧽`);
@@ -446,10 +471,10 @@ client.on("messageCreate", async (message) => {
     }
 
     // If no prompt but audio exists -> transcribe + explain
-    if (!userText && audioUrls.length > 0) {
+    if (!userText && audioAtts.length > 0) {
+      await message.channel.sendTyping();
       try {
-        await message.channel.sendTyping();
-        const transcript = await transcribeAudioFromUrl(audioUrls[0]);
+        const transcript = await transcribeAudioAttachment(audioAtts[0]);
         const explanation = await makeChatReply({
           userId: message.author.id,
           userText: "Explain this transcript briefly and clearly.",
@@ -458,13 +483,10 @@ client.on("messageCreate", async (message) => {
         });
 
         await message.reply(
-          `**Transcript:**\n${(transcript || "—").slice(0, 1400)}\n\n**Explanation:**\n${explanation}`.slice(
-            0,
-            1900
-          )
+          `**Transcript:**\n${(transcript || "—").slice(0, 1400)}\n\n**Explanation:**\n${explanation}`.slice(0, 1900)
         );
       } catch (e) {
-        console.error(e);
+        console.error("Transcribe (mention) failed:", e);
         await message.reply("⚠️ I couldn’t transcribe that voice note 😭");
       }
       return;
@@ -483,8 +505,8 @@ client.on("messageCreate", async (message) => {
       return;
     }
 
+    await message.channel.sendTyping();
     try {
-      await message.channel.sendTyping();
       const reply = await makeChatReply({
         userId: message.author.id,
         userText: finalText,
@@ -493,7 +515,7 @@ client.on("messageCreate", async (message) => {
       });
       await message.reply(reply.slice(0, 1900));
     } catch (e) {
-      console.error(e);
+      console.error("Chat (mention) failed:", e);
       await message.reply("⚠️ Error generating a reply.");
     }
   } catch (err) {
@@ -547,12 +569,13 @@ function helpText() {
 
 client.on("interactionCreate", async (interaction) => {
   try {
-    // Context Menu
+    // ========= Context Menu =========
     if (interaction.isMessageContextMenuCommand()) {
+      await safeDefer(interaction);
+
       const targetMsg = interaction.targetMessage;
 
       if (interaction.commandName === "Misfit: Summarize") {
-        await interaction.deferReply();
         const reply = await makeChatReply({
           userId: interaction.user.id,
           userText: "Summarize this.",
@@ -564,7 +587,6 @@ client.on("interactionCreate", async (interaction) => {
       }
 
       if (interaction.commandName === "Misfit: Explain") {
-        await interaction.deferReply();
         const reply = await makeChatReply({
           userId: interaction.user.id,
           userText: "Explain this clearly.",
@@ -576,7 +598,6 @@ client.on("interactionCreate", async (interaction) => {
       }
 
       if (interaction.commandName === "Misfit: Analyze Image") {
-        await interaction.deferReply();
         const imgs = extractImageUrlsFromMessage(targetMsg);
         if (imgs.length === 0) {
           await interaction.editReply("No image found in that message 😌");
@@ -593,42 +614,51 @@ client.on("interactionCreate", async (interaction) => {
       }
 
       if (interaction.commandName === "Misfit: Transcribe Voice") {
-        await interaction.deferReply();
-        const aud = extractAudioUrlsFromMessage(targetMsg);
+        const aud = extractAudioAttachmentsFromMessage(targetMsg);
         if (aud.length === 0) {
           await interaction.editReply("No audio/voice note found 😌");
           return;
         }
-        const transcript = await transcribeAudioFromUrl(aud[0]);
+
+        const transcript = await transcribeAudioAttachment(aud[0]);
         if (!transcript) {
           await interaction.editReply("Couldn’t transcribe that 😭");
           return;
         }
+
         const explain = await makeChatReply({
           userId: interaction.user.id,
           userText: "Explain this transcript briefly and clearly.",
           referencedText: transcript,
           imageUrls: [],
         });
+
         await interaction.editReply(
           `**Transcript:**\n${transcript}\n\n**Explanation:**\n${explain}`.slice(0, 1900)
         );
         return;
       }
 
+      await interaction.editReply("Nope. That one isn’t wired up 😌");
       return;
     }
 
-    // Slash
+    // ========= Slash =========
     if (!interaction.isChatInputCommand()) return;
 
     if (interaction.commandName === "help") {
-      await interaction.reply({ content: helpText(), ephemeral: true });
+      // help is fast; reply immediately
+      if (interaction.deferred || interaction.replied) {
+        await interaction.editReply(helpText());
+      } else {
+        await interaction.reply({ content: helpText(), ephemeral: true });
+      }
       return;
     }
 
+    await safeDefer(interaction);
+
     if (interaction.commandName === "ask") {
-      await interaction.deferReply();
       const prompt = interaction.options.getString("prompt", true);
 
       const targetMsg = await resolveTargetMessageFromSlash(interaction, "message");
@@ -647,7 +677,6 @@ client.on("interactionCreate", async (interaction) => {
     }
 
     if (interaction.commandName === "imagine") {
-      await interaction.deferReply();
       const prompt = interaction.options.getString("prompt", true);
 
       const pngBuf = await generateImageFromPrompt(prompt);
@@ -661,7 +690,6 @@ client.on("interactionCreate", async (interaction) => {
     }
 
     if (interaction.commandName === "summarize") {
-      await interaction.deferReply();
       const targetMsg = await resolveTargetMessageFromSlash(interaction);
       if (!targetMsg) {
         await interaction.editReply(
@@ -680,7 +708,6 @@ client.on("interactionCreate", async (interaction) => {
     }
 
     if (interaction.commandName === "explain") {
-      await interaction.deferReply();
       const targetMsg = await resolveTargetMessageFromSlash(interaction);
       if (!targetMsg) {
         await interaction.editReply(
@@ -699,12 +726,14 @@ client.on("interactionCreate", async (interaction) => {
     }
 
     if (interaction.commandName === "analyzeimage") {
-      await interaction.deferReply();
       const targetMsg = await resolveTargetMessageFromSlash(interaction);
-      const prompt = interaction.options.getString("prompt") || "Analyze this image.";
+      const prompt =
+        interaction.options.getString("prompt") || "Analyze this image.";
 
       if (!targetMsg) {
-        await interaction.editReply("Reply first, then run `/analyzeimage`, OR pass a message link 😌");
+        await interaction.editReply(
+          "Reply first, then run `/analyzeimage`, OR pass a message link 😌"
+        );
         return;
       }
       const imgs = extractImageUrlsFromMessage(targetMsg);
@@ -724,21 +753,22 @@ client.on("interactionCreate", async (interaction) => {
     }
 
     if (interaction.commandName === "transcribe") {
-      await interaction.deferReply();
       const targetMsg = await resolveTargetMessageFromSlash(interaction);
       const doExplain = interaction.options.getBoolean("explain") || false;
 
       if (!targetMsg) {
-        await interaction.editReply("Reply first, then run `/transcribe`, OR pass a message link 😌");
+        await interaction.editReply(
+          "Reply first, then run `/transcribe`, OR pass a message link 😌"
+        );
         return;
       }
-      const aud = extractAudioUrlsFromMessage(targetMsg);
+      const aud = extractAudioAttachmentsFromMessage(targetMsg);
       if (aud.length === 0) {
         await interaction.editReply("No audio/voice note found in that message 😌");
         return;
       }
 
-      const transcript = await transcribeAudioFromUrl(aud[0]);
+      const transcript = await transcribeAudioAttachment(aud[0]);
       if (!transcript) {
         await interaction.editReply("Couldn’t transcribe that audio 😭");
         return;
@@ -763,8 +793,6 @@ client.on("interactionCreate", async (interaction) => {
     }
 
     if (interaction.commandName === "summarizechannel") {
-      await interaction.deferReply();
-
       let count = interaction.options.getInteger("count", true);
       if (count < 1) count = 1;
       if (count > 100) count = 100;
@@ -796,10 +824,16 @@ client.on("interactionCreate", async (interaction) => {
       await interaction.editReply(reply.slice(0, 1900));
       return;
     }
+
+    await interaction.editReply("That command exists… but does nothing. Like some people here 😌");
   } catch (err) {
     console.error(err);
+
+    // If Discord already invalidated interaction, don't try to reply/edit.
+    if (isDiscordUnknownInteraction(err) || isAlreadyAcknowledged(err)) return;
+
     try {
-      if (interaction.deferred || interaction.replied) {
+      if (interaction?.deferred || interaction?.replied) {
         await interaction.editReply("⚠️ Something broke. Try again 😭");
       } else {
         await interaction.reply({ content: "⚠️ Something broke. Try again 😭", ephemeral: true });
