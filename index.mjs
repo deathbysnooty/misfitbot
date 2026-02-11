@@ -170,7 +170,9 @@ Personality rules:
     ],
   });
 
-  return resp.choices?.[0]?.message?.content?.trim() || "I couldn’t generate a reply.";
+  return (
+    resp.choices?.[0]?.message?.content?.trim() || "I couldn’t generate a reply."
+  );
 }
 
 async function transcribeAudioFromUrl(audioUrl) {
@@ -201,6 +203,25 @@ async function generateImageFromPrompt(prompt) {
   return Buffer.from(b64, "base64");
 }
 
+function formatMessageForChannelSummary(m) {
+  const content = (m.content || "").trim();
+  const parts = [];
+
+  // username: message
+  if (content) parts.push(content);
+
+  const imgCount = extractImageUrlsFromMessage(m).length;
+  const audCount = extractAudioUrlsFromMessage(m).length;
+
+  if (imgCount > 0) parts.push(`[${imgCount} image${imgCount === 1 ? "" : "s"}]`);
+  if (audCount > 0) parts.push(`[${audCount} audio]`);
+
+  // If absolutely nothing, skip
+  if (parts.length === 0) return "";
+
+  return `${m.author.username}: ${parts.join(" ")}`;
+}
+
 // ========= Command Registration =========
 async function registerCommands() {
   const clientId = process.env.DISCORD_CLIENT_ID;
@@ -224,7 +245,8 @@ async function registerCommands() {
     },
     {
       name: "ask",
-      description: "Ask MisfitBot anything (uses reply context or a message link).",
+      description:
+        "Ask MisfitBot anything (uses reply context or a message link).",
       options: [
         // REQUIRED options must come FIRST
         {
@@ -320,6 +342,20 @@ async function registerCommands() {
       ],
     },
 
+    // ✅ NEW: Summarize channel
+    {
+      name: "summarizechannel",
+      description: "Summarize the last N messages in this channel (max 100).",
+      options: [
+        {
+          name: "count",
+          description: "How many recent messages? (1–100)",
+          type: 4, // INTEGER
+          required: true,
+        },
+      ],
+    },
+
     // ---------- Context menu commands ----------
     { name: "Misfit: Summarize", type: ApplicationCommandType.Message },
     { name: "Misfit: Explain", type: ApplicationCommandType.Message },
@@ -352,7 +388,11 @@ client.on("messageCreate", async (message) => {
 
     // Store reply context for slash usage
     if (message.reference?.messageId) {
-      setReplyContext(message.author.id, message.channel.id, message.reference.messageId);
+      setReplyContext(
+        message.author.id,
+        message.channel.id,
+        message.reference.messageId
+      );
     }
 
     // Fun auto-reply
@@ -395,6 +435,7 @@ function helpText() {
     "• `/analyzeimage [message:<link>] [prompt:<text>]` — analyze an image in a message",
     "• `/transcribe [message:<link>] [explain:true|false]` — transcribe audio (optionally explain)",
     "• `/imagine prompt:<text>` — generate an image",
+    "• `/summarizechannel count:<1-100>` — summarize recent channel messages",
     "",
     "**Right-click a message → Apps:**",
     "• Misfit: Summarize / Explain / Analyze Image / Transcribe Voice",
@@ -489,7 +530,6 @@ client.on("interactionCreate", async (interaction) => {
       await interaction.deferReply();
       const prompt = interaction.options.getString("prompt", true);
 
-      // Optional: if they provided message link or have reply-context, include that as referencedText
       const targetMsg = await resolveTargetMessageFromSlash(interaction, "message");
       const referencedText = targetMsg?.content ? targetMsg.content : "";
       const imgs = targetMsg ? extractImageUrlsFromMessage(targetMsg) : [];
@@ -512,7 +552,10 @@ client.on("interactionCreate", async (interaction) => {
       const file = new AttachmentBuilder(pngBuf, { name: "misfit.png" });
 
       await interaction.editReply({
-        content: `Here. Don’t say I never do anything for you 😌\n**Prompt:** ${prompt}`.slice(0, 1800),
+        content: `Here. Don’t say I never do anything for you 😌\n**Prompt:** ${prompt}`.slice(
+          0,
+          1800
+        ),
         files: [file],
       });
       return;
@@ -562,7 +605,9 @@ client.on("interactionCreate", async (interaction) => {
       const prompt = interaction.options.getString("prompt") || "Analyze this image.";
 
       if (!targetMsg) {
-        await interaction.editReply("Reply first, then run `/analyzeimage`, OR pass a message link 😌");
+        await interaction.editReply(
+          "Reply first, then run `/analyzeimage`, OR pass a message link 😌"
+        );
         return;
       }
       const imgs = extractImageUrlsFromMessage(targetMsg);
@@ -587,7 +632,9 @@ client.on("interactionCreate", async (interaction) => {
       const doExplain = interaction.options.getBoolean("explain") || false;
 
       if (!targetMsg) {
-        await interaction.editReply("Reply first, then run `/transcribe`, OR pass a message link 😌");
+        await interaction.editReply(
+          "Reply first, then run `/transcribe`, OR pass a message link 😌"
+        );
         return;
       }
       const aud = extractAudioUrlsFromMessage(targetMsg);
@@ -619,13 +666,53 @@ client.on("interactionCreate", async (interaction) => {
       );
       return;
     }
+
+    // ✅ NEW: summarizechannel
+    if (interaction.commandName === "summarizechannel") {
+      await interaction.deferReply();
+
+      let count = interaction.options.getInteger("count", true);
+      if (count < 1) count = 1;
+      if (count > 100) count = 100;
+
+      const fetched = await interaction.channel.messages.fetch({ limit: count });
+
+      const lines = fetched
+        .filter((m) => !m.author?.bot)
+        .map(formatMessageForChannelSummary)
+        .filter(Boolean)
+        .reverse()
+        .join("\n");
+
+      if (!lines.trim()) {
+        await interaction.editReply("Nothing to summarize here 🤨");
+        return;
+      }
+
+      // Safety cap to avoid huge prompts
+      const capped = lines.length > 12000 ? lines.slice(-12000) : lines;
+
+      const reply = await makeChatReply({
+        userId: interaction.user.id,
+        userText:
+          "Summarize this channel conversation. Include: key points, any decisions, and a short vibe/chaos score (0-10).",
+        referencedText: capped,
+        imageUrls: [],
+      });
+
+      await interaction.editReply(reply.slice(0, 1900));
+      return;
+    }
   } catch (err) {
     console.error(err);
     try {
       if (interaction.deferred || interaction.replied) {
         await interaction.editReply("⚠️ Something broke. Try again 😭");
       } else {
-        await interaction.reply({ content: "⚠️ Something broke. Try again 😭", ephemeral: true });
+        await interaction.reply({
+          content: "⚠️ Something broke. Try again 😭",
+          ephemeral: true,
+        });
       }
     } catch {}
   }
