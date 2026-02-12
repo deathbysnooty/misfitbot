@@ -13,6 +13,10 @@ import crypto from "crypto";
 import Database from "better-sqlite3";
 
 const OWNER_ID = "1417834414368362596";
+const WELCOME_CHANNEL_ID = process.env.WELCOME_CHANNEL_ID || "";
+const WELCOME_MESSAGE =
+  process.env.WELCOME_MESSAGE ||
+  "Welcome to **{guild}**, {user}! 👋\nUse `/help` to see what I can do, and `/profile set` if you want me to remember your preferences.";
 
 // ========= Helpers =========
 function extractImageUrlsFromMessage(msg) {
@@ -45,7 +49,9 @@ function extractAudioAttachmentsFromMessage(msg) {
     const name = (att.name || "").toLowerCase();
 
     const looksLikeVoiceNote =
-      name.includes("voice") || name.includes("audio") || name.includes("recording");
+      name.includes("voice") ||
+      name.includes("audio") ||
+      name.includes("recording");
 
     const isAudio =
       ct.startsWith("audio/") ||
@@ -154,6 +160,88 @@ db.exec(`
   );
 `);
 
+// ✅ NEW: opt-in user profiles (notes + neutral vibe summary)
+db.exec(`
+  CREATE TABLE IF NOT EXISTS user_profiles (
+    user_id TEXT PRIMARY KEY,
+    notes TEXT NOT NULL DEFAULT '',
+    vibe_summary TEXT NOT NULL DEFAULT '',
+    updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+  );
+`);
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS welcome_config (
+    guild_id TEXT PRIMARY KEY,
+    channel_id TEXT NOT NULL,
+    message TEXT NOT NULL,
+    updated_by TEXT NOT NULL DEFAULT '',
+    updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+  );
+`);
+
+function getProfile(userId) {
+  return db
+    .prepare(`SELECT notes, vibe_summary FROM user_profiles WHERE user_id = ?`)
+    .get(userId);
+}
+
+function upsertProfile(userId, notes) {
+  db.prepare(`
+    INSERT INTO user_profiles (user_id, notes, vibe_summary, updated_at)
+    VALUES (?, ?, '', strftime('%s','now'))
+    ON CONFLICT(user_id) DO UPDATE SET
+      notes = excluded.notes,
+      updated_at = strftime('%s','now')
+  `).run(userId, notes);
+}
+
+function setVibe(userId, vibe) {
+  db.prepare(`
+    UPDATE user_profiles
+    SET vibe_summary = ?, updated_at = strftime('%s','now')
+    WHERE user_id = ?
+  `).run(vibe, userId);
+}
+
+function clearProfile(userId) {
+  db.prepare(`DELETE FROM user_profiles WHERE user_id = ?`).run(userId);
+}
+
+function getWelcomeConfig(guildId) {
+  return db
+    .prepare(
+      `SELECT guild_id, channel_id, message, updated_by, updated_at
+       FROM welcome_config
+       WHERE guild_id = ?`
+    )
+    .get(guildId);
+}
+
+function upsertWelcomeConfig(guildId, channelId, message, updatedBy) {
+  db.prepare(`
+    INSERT INTO welcome_config (guild_id, channel_id, message, updated_by, updated_at)
+    VALUES (?, ?, ?, ?, strftime('%s','now'))
+    ON CONFLICT(guild_id) DO UPDATE SET
+      channel_id = excluded.channel_id,
+      message = excluded.message,
+      updated_by = excluded.updated_by,
+      updated_at = strftime('%s','now')
+  `).run(guildId, channelId, message, updatedBy);
+}
+
+function clearWelcomeConfig(guildId) {
+  db.prepare(`DELETE FROM welcome_config WHERE guild_id = ?`).run(guildId);
+}
+
+function formatWelcomeMessage(template, guildName, memberId) {
+  return (template || WELCOME_MESSAGE)
+    .replaceAll("{user}", `<@${memberId}>`)
+    .replaceAll("{guild}", guildName)
+    .replace(/<(\d{17,20})>/g, "<#$1>")
+    .replaceAll("\\n", "\n");
+}
+
 const FIXED_MEMORY = fs.existsSync("./fixed_memory.txt")
   ? fs.readFileSync("./fixed_memory.txt", "utf8")
   : "";
@@ -162,6 +250,7 @@ const FIXED_MEMORY = fs.existsSync("./fixed_memory.txt")
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
   ],
@@ -192,6 +281,16 @@ async function makeChatReply({ userId, userText, referencedText, imageUrls }) {
   const askerMemory =
     db.prepare(`SELECT notes FROM user_memory WHERE user_id = ?`).get(userId)
       ?.notes || "";
+
+  const profileRow = getProfile(userId);
+  const profileBlock = profileRow?.notes
+    ? `USER PROFILE (opt-in):
+${profileRow.notes}
+
+VIBE SUMMARY:
+${profileRow.vibe_summary || "(none)"}`
+    : `USER PROFILE (opt-in):
+(none)`;
 
   const finalPrompt = referencedText
     ? `Message being replied to:\n\n${referencedText}\n\nUser request:\n${userText}`
@@ -224,6 +323,8 @@ ${FIXED_MEMORY}
 
 USER MEMORY (about the current user only):
 ${askerMemory ? askerMemory : "(none)"}
+
+${profileBlock}
 
 Personality rules:
 - You are helpful, but slightly sassy and witty.
@@ -320,45 +421,218 @@ async function registerCommands() {
       name: "ask",
       description: "Ask MisfitBot anything (reply context or message link).",
       options: [
-        { name: "prompt", description: "What do you want to ask?", type: 3, required: true },
-        { name: "message", description: "Discord message link (optional). If omitted, uses your recent reply context.", type: 3, required: false },
+        {
+          name: "prompt",
+          description: "What do you want to ask?",
+          type: 3,
+          required: true,
+        },
+        {
+          name: "message",
+          description:
+            "Discord message link (optional). If omitted, uses your recent reply context.",
+          type: 3,
+          required: false,
+        },
       ],
     },
     {
       name: "imagine",
       description: "Generate an image from a prompt.",
-      options: [{ name: "prompt", description: "Describe the image you want.", type: 3, required: true }],
+      options: [
+        {
+          name: "prompt",
+          description: "Describe the image you want.",
+          type: 3,
+          required: true,
+        },
+      ],
     },
     {
       name: "summarize",
       description: "Summarize a message (reply context or message link).",
-      options: [{ name: "message", description: "Discord message link (optional). If omitted, uses your recent reply context.", type: 3, required: false }],
+      options: [
+        {
+          name: "message",
+          description:
+            "Discord message link (optional). If omitted, uses your recent reply context.",
+          type: 3,
+          required: false,
+        },
+      ],
     },
     {
       name: "explain",
       description: "Explain a message (reply context or message link).",
-      options: [{ name: "message", description: "Discord message link (optional). If omitted, uses your recent reply context.", type: 3, required: false }],
+      options: [
+        {
+          name: "message",
+          description:
+            "Discord message link (optional). If omitted, uses your recent reply context.",
+          type: 3,
+          required: false,
+        },
+      ],
     },
     {
       name: "analyzeimage",
       description: "Analyze an image (reply context or message link).",
       options: [
-        { name: "message", description: "Discord message link (optional). If omitted, uses your recent reply context.", type: 3, required: false },
-        { name: "prompt", description: "What should I look for? (optional)", type: 3, required: false },
+        {
+          name: "message",
+          description:
+            "Discord message link (optional). If omitted, uses your recent reply context.",
+          type: 3,
+          required: false,
+        },
+        {
+          name: "prompt",
+          description: "What should I look for? (optional)",
+          type: 3,
+          required: false,
+        },
       ],
     },
     {
       name: "transcribe",
       description: "Transcribe a voice note/audio (reply context or message link).",
       options: [
-        { name: "message", description: "Discord message link (optional). If omitted, uses your recent reply context.", type: 3, required: false },
-        { name: "explain", description: "Also explain what it means", type: 5, required: false },
+        {
+          name: "message",
+          description:
+            "Discord message link (optional). If omitted, uses your recent reply context.",
+          type: 3,
+          required: false,
+        },
+        {
+          name: "explain",
+          description: "Also explain what it means",
+          type: 5,
+          required: false,
+        },
       ],
     },
     {
       name: "summarizechannel",
       description: "Summarize last N messages in this channel (max 100).",
-      options: [{ name: "count", description: "How many recent messages? (1–100)", type: 4, required: true }],
+      options: [
+        {
+          name: "count",
+          description: "How many recent messages? (1–100)",
+          type: 4,
+          required: true,
+        },
+      ],
+    },
+    {
+      name: "welcome",
+      description: "Configure join welcome message for this server (owner).",
+      options: [
+        {
+          type: 1,
+          name: "set",
+          description: "Set welcome channel + message template.",
+          options: [
+            {
+              type: 7,
+              name: "channel",
+              description: "Where welcome messages should be posted",
+              required: true,
+            },
+            {
+              type: 3,
+              name: "message",
+              description:
+                "Template. Use {user}, {guild}, and \\n. Example: Welcome {user} to {guild}!",
+              required: true,
+            },
+          ],
+        },
+        {
+          type: 1,
+          name: "show",
+          description: "Show current welcome setup for this server.",
+        },
+        {
+          type: 1,
+          name: "preview",
+          description: "Preview the current welcome message format.",
+        },
+        {
+          type: 1,
+          name: "clear",
+          description: "Clear DB welcome config and fall back to .env.",
+        },
+      ],
+    },
+
+    // ✅ NEW: /profile set|show|clear|peek
+    {
+      name: "profile",
+      description: "Manage your personal bot profile (opt-in).",
+      options: [
+        {
+          type: 1,
+          name: "set",
+          description: "Set/update your profile note (opt-in).",
+          options: [
+            {
+              type: 3,
+              name: "note",
+              description:
+                "Example: I'm GMT+8, I like Valorant, keep replies short",
+              required: true,
+            },
+          ],
+        },
+        { type: 1, name: "show", description: "Show your profile." },
+        { type: 1, name: "clear", description: "Delete your profile." },
+        {
+          type: 1,
+          name: "peek",
+          description: "Owner only: view someone else’s profile.",
+          options: [
+            {
+              type: 6,
+              name: "user",
+              description: "User to view",
+              required: true,
+            },
+          ],
+        },
+        {
+          type: 1,
+          name: "setfor",
+          description: "Owner only: set a profile note for a user.",
+          options: [
+            {
+              type: 6,
+              name: "user",
+              description: "User to update",
+              required: true,
+            },
+            {
+              type: 3,
+              name: "note",
+              description: "Profile note to store for this user",
+              required: true,
+            },
+          ],
+        },
+        {
+          type: 1,
+          name: "clearfor",
+          description: "Owner only: clear a user profile.",
+          options: [
+            {
+              type: 6,
+              name: "user",
+              description: "User to clear",
+              required: true,
+            },
+          ],
+        },
+      ],
     },
 
     // Context menu
@@ -387,13 +661,46 @@ client.once("ready", async () => {
   await registerCommands();
 });
 
+client.on("guildMemberAdd", async (member) => {
+  try {
+    const cfg = getWelcomeConfig(member.guild.id);
+    const selectedChannelId = cfg?.channel_id || WELCOME_CHANNEL_ID;
+    const configuredChannel = selectedChannelId
+      ? await member.guild.channels.fetch(selectedChannelId).catch(() => null)
+      : null;
+
+    const targetChannel =
+      configuredChannel && configuredChannel.isTextBased()
+        ? configuredChannel
+        : member.guild.systemChannel && member.guild.systemChannel.isTextBased()
+        ? member.guild.systemChannel
+        : null;
+
+    if (!targetChannel) return;
+
+    const welcomeText = formatWelcomeMessage(
+      cfg?.message || WELCOME_MESSAGE,
+      member.guild.name,
+      member.id
+    );
+
+    await targetChannel.send(welcomeText);
+  } catch (err) {
+    console.error("Welcome message failed:", err);
+  }
+});
+
 client.on("messageCreate", async (message) => {
   try {
     if (message.author.bot) return;
 
     // Track reply context for slash usage
     if (message.reference?.messageId) {
-      setReplyContext(message.author.id, message.channel.id, message.reference.messageId);
+      setReplyContext(
+        message.author.id,
+        message.channel.id,
+        message.reference.messageId
+      );
     }
 
     // Bruh trigger
@@ -418,7 +725,9 @@ client.on("messageCreate", async (message) => {
 
     if (message.reference?.messageId) {
       try {
-        repliedMsg = await message.channel.messages.fetch(message.reference.messageId);
+        repliedMsg = await message.channel.messages.fetch(
+          message.reference.messageId
+        );
         if (repliedMsg?.content) referencedText = repliedMsg.content.trim();
       } catch {}
     }
@@ -429,7 +738,9 @@ client.on("messageCreate", async (message) => {
 
     if (repliedMsg) {
       imageUrls = imageUrls.concat(extractImageUrlsFromMessage(repliedMsg));
-      audioAtts = audioAtts.concat(extractAudioAttachmentsFromMessage(repliedMsg));
+      audioAtts = audioAtts.concat(
+        extractAudioAttachmentsFromMessage(repliedMsg)
+      );
     }
 
     imageUrls = imageUrls.slice(0, 3);
@@ -438,7 +749,10 @@ client.on("messageCreate", async (message) => {
     // ===== Owner-only memory commands (mention mode) =====
     const setMatch = userText.match(/^mem\s+set\s+<@!?(\d+)>\s+(.+)$/i);
     if (setMatch) {
-      if (!isOwner) return void (await message.reply("Nice try. Only Snooty can edit memory 😌"));
+      if (!isOwner)
+        return void (await message.reply(
+          "Nice try. Only Snooty can edit memory 😌"
+        ));
       const targetId = setMatch[1];
       const notes = setMatch[2].trim();
 
@@ -454,16 +768,28 @@ client.on("messageCreate", async (message) => {
 
     const showMatch = userText.match(/^mem\s+show\s+<@!?(\d+)>$/i);
     if (showMatch) {
-      if (!isOwner) return void (await message.reply("Only Snooty can view other people’s memory 😌"));
+      if (!isOwner)
+        return void (await message.reply(
+          "Only Snooty can view other people’s memory 😌"
+        ));
       const targetId = showMatch[1];
-      const row = db.prepare(`SELECT notes FROM user_memory WHERE user_id = ?`).get(targetId);
-      await message.reply(row?.notes ? `Memory for <@${targetId}>:\n${row.notes}` : `I have nothing stored for <@${targetId}> yet.`);
+      const row = db
+        .prepare(`SELECT notes FROM user_memory WHERE user_id = ?`)
+        .get(targetId);
+      await message.reply(
+        row?.notes
+          ? `Memory for <@${targetId}>:\n${row.notes}`
+          : `I have nothing stored for <@${targetId}> yet.`
+      );
       return;
     }
 
     const forgetMatch = userText.match(/^mem\s+forget\s+<@!?(\d+)>$/i);
     if (forgetMatch) {
-      if (!isOwner) return void (await message.reply("Only Snooty can wipe memory 😈"));
+      if (!isOwner)
+        return void (await message.reply(
+          "Only Snooty can wipe memory 😈"
+        ));
       const targetId = forgetMatch[1];
       db.prepare(`DELETE FROM user_memory WHERE user_id = ?`).run(targetId);
       await message.reply(`Memory wiped for <@${targetId}> 🧽`);
@@ -483,7 +809,10 @@ client.on("messageCreate", async (message) => {
         });
 
         await message.reply(
-          `**Transcript:**\n${(transcript || "—").slice(0, 1400)}\n\n**Explanation:**\n${explanation}`.slice(0, 1900)
+          `**Transcript:**\n${(transcript || "—").slice(
+            0,
+            1400
+          )}\n\n**Explanation:**\n${explanation}`.slice(0, 1900)
         );
       } catch (e) {
         console.error("Transcribe (mention) failed:", e);
@@ -524,7 +853,10 @@ client.on("messageCreate", async (message) => {
 });
 
 // Resolve target message from slash option or reply context
-async function resolveTargetMessageFromSlash(interaction, optionName = "message") {
+async function resolveTargetMessageFromSlash(
+  interaction,
+  optionName = "message"
+) {
   const link = interaction.options.getString(optionName);
   if (link) {
     const parsed = parseDiscordMessageLink(link);
@@ -551,6 +883,15 @@ function helpText() {
     "• `@MisfitBot mem set @User <notes>`",
     "• `@MisfitBot mem show @User`",
     "• `@MisfitBot mem forget @User`",
+    "• `/welcome set channel:#channel message:<text>` (owner)",
+    "• `/welcome show` / `/welcome preview` / `/welcome clear` (owner)",
+    "",
+    "**Profiles (opt-in):**",
+    "• `/profile set note:<text>`",
+    "• `/profile show`",
+    "• `/profile clear`",
+    "• `/profile setfor user:@User note:<text>` (owner)",
+    "• `/profile clearfor user:@User` (owner)",
     "",
     "**Slash:**",
     "• `/help`",
@@ -634,7 +975,10 @@ client.on("interactionCreate", async (interaction) => {
         });
 
         await interaction.editReply(
-          `**Transcript:**\n${transcript}\n\n**Explanation:**\n${explain}`.slice(0, 1900)
+          `**Transcript:**\n${transcript}\n\n**Explanation:**\n${explain}`.slice(
+            0,
+            1900
+          )
         );
         return;
       }
@@ -656,12 +1000,233 @@ client.on("interactionCreate", async (interaction) => {
       return;
     }
 
+    if (interaction.commandName === "welcome") {
+      await safeDefer(interaction, { ephemeral: true });
+
+      if (!interaction.guildId) {
+        await interaction.editReply("This command only works in a server.");
+        return;
+      }
+
+      const isOwner = interaction.user.id === OWNER_ID;
+      if (!isOwner) {
+        await interaction.editReply("Only Snooty can change welcome settings 😌");
+        return;
+      }
+
+      const sub = interaction.options.getSubcommand();
+
+      if (sub === "set") {
+        const channel = interaction.options.getChannel("channel", true);
+        const message = interaction.options
+          .getString("message", true)
+          .trim()
+          .slice(0, 1800);
+
+        if (!channel.isTextBased()) {
+          await interaction.editReply("Please choose a text channel.");
+          return;
+        }
+
+        upsertWelcomeConfig(
+          interaction.guildId,
+          channel.id,
+          message,
+          interaction.user.id
+        );
+
+        const preview = formatWelcomeMessage(
+          message,
+          interaction.guild?.name || "this server",
+          interaction.user.id
+        );
+
+        await interaction.editReply(
+          `✅ Welcome config saved for <#${channel.id}>.\n\n**Preview:**\n${preview}`.slice(
+            0,
+            1900
+          )
+        );
+        return;
+      }
+
+      if (sub === "show") {
+        const cfg = getWelcomeConfig(interaction.guildId);
+        if (!cfg) {
+          await interaction.editReply(
+            [
+              "No DB welcome config set for this server.",
+              `Current fallback channel: ${
+                WELCOME_CHANNEL_ID ? `<#${WELCOME_CHANNEL_ID}>` : "(system channel)"
+              }`,
+              `Current fallback message:`,
+              WELCOME_MESSAGE,
+            ].join("\n")
+          );
+          return;
+        }
+
+        await interaction.editReply(
+          [
+            `Channel: <#${cfg.channel_id}>`,
+            `Updated by: <@${cfg.updated_by}>`,
+            `Template:`,
+            cfg.message,
+          ].join("\n")
+        );
+        return;
+      }
+
+      if (sub === "preview") {
+        const cfg = getWelcomeConfig(interaction.guildId);
+        const template = cfg?.message || WELCOME_MESSAGE;
+        const preview = formatWelcomeMessage(
+          template,
+          interaction.guild?.name || "this server",
+          interaction.user.id
+        );
+        await interaction.editReply(`**Preview:**\n${preview}`.slice(0, 1900));
+        return;
+      }
+
+      if (sub === "clear") {
+        clearWelcomeConfig(interaction.guildId);
+        await interaction.editReply("🧽 Welcome config cleared. Falling back to `.env`.");
+        return;
+      }
+
+      await interaction.editReply("That subcommand isn’t wired up 😌");
+      return;
+    }
+
+    // ✅ NEW: /profile uses EPHEMERAL defer
+    if (interaction.commandName === "profile") {
+      await safeDefer(interaction, { ephemeral: true });
+
+      const sub = interaction.options.getSubcommand();
+      const isOwner = interaction.user.id === OWNER_ID;
+
+      if (sub === "set") {
+        const note = interaction.options
+          .getString("note", true)
+          .trim()
+          .slice(0, 1200);
+
+        upsertProfile(interaction.user.id, note);
+
+        // Generate a neutral vibe summary (no judgments)
+        const vibeResp = await openai.chat.completions.create({
+          model: "gpt-4.1-mini",
+          messages: [
+            {
+              role: "system",
+              content:
+                "Turn this note into a short neutral vibe summary (1–2 lines). No negative judgments, no sensitive inferences.",
+            },
+            { role: "user", content: note },
+          ],
+        });
+
+        const vibe =
+          vibeResp.choices?.[0]?.message?.content?.trim().slice(0, 280) || "";
+
+        setVibe(interaction.user.id, vibe);
+
+        await interaction.editReply("✅ Profile saved. I’ll remember that.");
+        return;
+      }
+
+      if (sub === "show") {
+        const row = getProfile(interaction.user.id);
+        if (!row) {
+          await interaction.editReply("You don’t have a profile yet. Use `/profile set`.");
+          return;
+        }
+        await interaction.editReply(
+          `**Your profile note:**\n${row.notes}\n\n**Vibe summary:**\n${row.vibe_summary || "(none)"}`
+        );
+        return;
+      }
+
+      if (sub === "clear") {
+        clearProfile(interaction.user.id);
+        await interaction.editReply("🧽 Profile deleted.");
+        return;
+      }
+
+      if (sub === "peek") {
+        if (!isOwner) {
+          await interaction.editReply("Only Snooty can peek 😌");
+          return;
+        }
+        const user = interaction.options.getUser("user", true);
+        const row = getProfile(user.id);
+        await interaction.editReply(
+          row
+            ? `**Profile for ${user.username}:**\n${row.notes}\n\n**Vibe:**\n${row.vibe_summary || "(none)"}`
+            : `No profile stored for ${user.username}.`
+        );
+        return;
+      }
+
+      if (sub === "setfor") {
+        if (!isOwner) {
+          await interaction.editReply("Only Snooty can set profiles for others 😌");
+          return;
+        }
+        const user = interaction.options.getUser("user", true);
+        const note = interaction.options
+          .getString("note", true)
+          .trim()
+          .slice(0, 1200);
+
+        upsertProfile(user.id, note);
+
+        const vibeResp = await openai.chat.completions.create({
+          model: "gpt-4.1-mini",
+          messages: [
+            {
+              role: "system",
+              content:
+                "Turn this note into a short neutral vibe summary (1–2 lines). No negative judgments, no sensitive inferences.",
+            },
+            { role: "user", content: note },
+          ],
+        });
+
+        const vibe =
+          vibeResp.choices?.[0]?.message?.content?.trim().slice(0, 280) || "";
+
+        setVibe(user.id, vibe);
+
+        await interaction.editReply(`✅ Profile saved for ${user.username}.`);
+        return;
+      }
+
+      if (sub === "clearfor") {
+        if (!isOwner) {
+          await interaction.editReply("Only Snooty can clear profiles for others 😌");
+          return;
+        }
+        const user = interaction.options.getUser("user", true);
+        clearProfile(user.id);
+        await interaction.editReply(`🧽 Profile deleted for ${user.username}.`);
+        return;
+      }
+
+      await interaction.editReply("That subcommand isn’t wired up 😌");
+      return;
+    }
+
     await safeDefer(interaction);
 
     if (interaction.commandName === "ask") {
       const prompt = interaction.options.getString("prompt", true);
 
-      const targetMsg = await resolveTargetMessageFromSlash(interaction, "message");
+      const targetMsg = await resolveTargetMessageFromSlash(
+        interaction,
+        "message"
+      );
       const referencedText = targetMsg?.content ? targetMsg.content : "";
       const imgs = targetMsg ? extractImageUrlsFromMessage(targetMsg) : [];
 
@@ -683,7 +1248,10 @@ client.on("interactionCreate", async (interaction) => {
       const file = new AttachmentBuilder(pngBuf, { name: "misfit.png" });
 
       await interaction.editReply({
-        content: `Here. Don’t say I never do anything for you 😌\n**Prompt:** ${prompt}`.slice(0, 1800),
+        content: `Here. Don’t say I never do anything for you 😌\n**Prompt:** ${prompt}`.slice(
+          0,
+          1800
+        ),
         files: [file],
       });
       return;
@@ -764,7 +1332,9 @@ client.on("interactionCreate", async (interaction) => {
       }
       const aud = extractAudioAttachmentsFromMessage(targetMsg);
       if (aud.length === 0) {
-        await interaction.editReply("No audio/voice note found in that message 😌");
+        await interaction.editReply(
+          "No audio/voice note found in that message 😌"
+        );
         return;
       }
 
@@ -775,7 +1345,9 @@ client.on("interactionCreate", async (interaction) => {
       }
 
       if (!doExplain) {
-        await interaction.editReply(`**Transcript:**\n${transcript}`.slice(0, 1900));
+        await interaction.editReply(
+          `**Transcript:**\n${transcript}`.slice(0, 1900)
+        );
         return;
       }
 
@@ -787,7 +1359,10 @@ client.on("interactionCreate", async (interaction) => {
       });
 
       await interaction.editReply(
-        `**Transcript:**\n${transcript}\n\n**Explanation:**\n${explanation}`.slice(0, 1900)
+        `**Transcript:**\n${transcript}\n\n**Explanation:**\n${explanation}`.slice(
+          0,
+          1900
+        )
       );
       return;
     }
@@ -825,7 +1400,9 @@ client.on("interactionCreate", async (interaction) => {
       return;
     }
 
-    await interaction.editReply("That command exists… but does nothing. Like some people here 😌");
+    await interaction.editReply(
+      "That command exists… but does nothing. Like some people here 😌"
+    );
   } catch (err) {
     console.error(err);
 
@@ -836,7 +1413,10 @@ client.on("interactionCreate", async (interaction) => {
       if (interaction?.deferred || interaction?.replied) {
         await interaction.editReply("⚠️ Something broke. Try again 😭");
       } else {
-        await interaction.reply({ content: "⚠️ Something broke. Try again 😭", ephemeral: true });
+        await interaction.reply({
+          content: "⚠️ Something broke. Try again 😭",
+          ephemeral: true,
+        });
       }
     } catch {}
   }
