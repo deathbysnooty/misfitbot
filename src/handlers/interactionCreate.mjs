@@ -1,4 +1,4 @@
-import { AttachmentBuilder } from "discord.js";
+import { AttachmentBuilder, EmbedBuilder } from "discord.js";
 
 export function registerInteractionCreateHandler({
   client,
@@ -39,6 +39,24 @@ export function registerInteractionCreateHandler({
   autoPurgeModes,
   formatWelcomeMessage,
 }) {
+  const EMBED_COLORS = {
+    info: 0x5865f2,
+    success: 0x57f287,
+    warn: 0xfee75c,
+    error: 0xed4245,
+  };
+
+  function statusEmbed({
+    title,
+    description,
+    tone = "info",
+  }) {
+    return new EmbedBuilder()
+      .setColor(EMBED_COLORS[tone] || EMBED_COLORS.info)
+      .setTitle(title)
+      .setDescription(String(description || "").slice(0, 4000));
+  }
+
   async function resolveTargetMessageFromSlash(interaction, optionName = "message") {
     const link = interaction.options.getString(optionName);
     if (link) {
@@ -394,10 +412,15 @@ export function registerInteractionCreateHandler({
       if (!interaction.isChatInputCommand()) return;
 
       if (interaction.commandName === "help") {
+        const embed = statusEmbed({
+          title: "MisfitBot Help",
+          description: helpText,
+          tone: "info",
+        });
         if (interaction.deferred || interaction.replied) {
-          await interaction.editReply(helpText);
+          await interaction.editReply({ embeds: [embed] });
         } else {
-          await interaction.reply({ content: helpText, ephemeral: true });
+          await interaction.reply({ embeds: [embed], ephemeral: true });
         }
         return;
       }
@@ -406,13 +429,29 @@ export function registerInteractionCreateHandler({
         await safeDefer(interaction, { ephemeral: true });
 
         if (!interaction.guildId) {
-          await interaction.editReply("This command only works in a server.");
+          await interaction.editReply({
+            embeds: [
+              statusEmbed({
+                title: "Welcome Config",
+                description: "This command only works in a server.",
+                tone: "warn",
+              }),
+            ],
+          });
           return;
         }
 
         const isOwner = interaction.user.id === OWNER_ID;
         if (!isOwner) {
-          await interaction.editReply("Only Snooty can change welcome settings 😌");
+          await interaction.editReply({
+            embeds: [
+              statusEmbed({
+                title: "Permission Denied",
+                description: "Only Snooty can change welcome settings 😌",
+                tone: "error",
+              }),
+            ],
+          });
           return;
         }
 
@@ -426,7 +465,15 @@ export function registerInteractionCreateHandler({
             .slice(0, 1800);
 
           if (!channel.isTextBased()) {
-            await interaction.editReply("Please choose a text channel.");
+            await interaction.editReply({
+              embeds: [
+                statusEmbed({
+                  title: "Welcome Config",
+                  description: "Please choose a text channel.",
+                  tone: "warn",
+                }),
+              ],
+            });
             return;
           }
 
@@ -444,39 +491,57 @@ export function registerInteractionCreateHandler({
             WELCOME_MESSAGE
           );
 
-          await interaction.editReply(
-            `✅ Welcome config saved for <#${channel.id}>.\n\n**Preview:**\n${preview}`.slice(
-              0,
-              1900
-            )
-          );
+          await interaction.editReply({
+            embeds: [
+              statusEmbed({
+                title: "Welcome Config Saved",
+                description: `Channel: <#${channel.id}>\n\nPreview:\n${preview}`.slice(
+                  0,
+                  1900
+                ),
+                tone: "success",
+              }),
+            ],
+          });
           return;
         }
 
         if (sub === "show") {
           const cfg = getWelcomeConfig(interaction.guildId);
           if (!cfg) {
-            await interaction.editReply(
-              [
-                "No DB welcome config set for this server.",
-                `Current fallback channel: ${
-                  WELCOME_CHANNEL_ID ? `<#${WELCOME_CHANNEL_ID}>` : "(system channel)"
-                }`,
-                "Current fallback message:",
-                WELCOME_MESSAGE,
-              ].join("\n")
-            );
+            await interaction.editReply({
+              embeds: [
+                statusEmbed({
+                  title: "Welcome Config",
+                  description: [
+                    "No DB welcome config set for this server.",
+                    `Current fallback channel: ${
+                      WELCOME_CHANNEL_ID ? `<#${WELCOME_CHANNEL_ID}>` : "(system channel)"
+                    }`,
+                    "Current fallback message:",
+                    WELCOME_MESSAGE,
+                  ].join("\n"),
+                  tone: "info",
+                }),
+              ],
+            });
             return;
           }
 
-          await interaction.editReply(
-            [
-              `Channel: <#${cfg.channel_id}>`,
-              `Updated by: <@${cfg.updated_by}>`,
-              "Template:",
-              cfg.message,
-            ].join("\n")
-          );
+          await interaction.editReply({
+            embeds: [
+              statusEmbed({
+                title: "Welcome Config",
+                description: [
+                  `Channel: <#${cfg.channel_id}>`,
+                  `Updated by: <@${cfg.updated_by}>`,
+                  "Template:",
+                  cfg.message,
+                ].join("\n"),
+                tone: "info",
+              }),
+            ],
+          });
           return;
         }
 
@@ -489,13 +554,29 @@ export function registerInteractionCreateHandler({
             interaction.user.id,
             WELCOME_MESSAGE
           );
-          await interaction.editReply(`**Preview:**\n${preview}`.slice(0, 1900));
+          await interaction.editReply({
+            embeds: [
+              statusEmbed({
+                title: "Welcome Preview",
+                description: preview.slice(0, 1900),
+                tone: "info",
+              }),
+            ],
+          });
           return;
         }
 
         if (sub === "clear") {
           clearWelcomeConfig(interaction.guildId);
-          await interaction.editReply("🧽 Welcome config cleared. Falling back to `.env`.");
+          await interaction.editReply({
+            embeds: [
+              statusEmbed({
+                title: "Welcome Config Cleared",
+                description: "Falling back to `.env`.",
+                tone: "success",
+              }),
+            ],
+          });
           return;
         }
 
@@ -508,27 +589,58 @@ export function registerInteractionCreateHandler({
 
         const isOwner = interaction.user.id === OWNER_ID;
         if (!isOwner) {
-          await interaction.editReply("Only Snooty can change bot mode 😌");
+          await interaction.editReply({
+            embeds: [
+              statusEmbed({
+                title: "Permission Denied",
+                description: "Only Snooty can change bot mode 😌",
+                tone: "error",
+              }),
+            ],
+          });
           return;
         }
 
         const sub = interaction.options.getSubcommand();
 
         if (sub === "show") {
-          await interaction.editReply(`Current mode: \`${getBotMode()}\``);
+          await interaction.editReply({
+            embeds: [
+              statusEmbed({
+                title: "Current Mode",
+                description: `\`${getBotMode()}\``,
+                tone: "info",
+              }),
+            ],
+          });
           return;
         }
 
         if (sub === "set") {
           const mode = interaction.options.getString("name", true).toLowerCase();
           if (!MODE_PRESETS[mode]) {
-            await interaction.editReply(
-              "Invalid mode. Use one of: sassy, chill, serious, hype, rude, ultraroast."
-            );
+            await interaction.editReply({
+              embeds: [
+                statusEmbed({
+                  title: "Invalid Mode",
+                  description:
+                    "Use one of: sassy, chill, serious, hype, rude, ultraroast.",
+                  tone: "warn",
+                }),
+              ],
+            });
             return;
           }
           setBotMode(mode);
-          await interaction.editReply(`✅ Mode updated to \`${mode}\`.`);
+          await interaction.editReply({
+            embeds: [
+              statusEmbed({
+                title: "Mode Updated",
+                description: `Now using \`${mode}\`.`,
+                tone: "success",
+              }),
+            ],
+          });
           return;
         }
 
@@ -540,13 +652,29 @@ export function registerInteractionCreateHandler({
         await safeDefer(interaction, { ephemeral: true });
 
         if (!interaction.guildId) {
-          await interaction.editReply("This command only works in a server.");
+          await interaction.editReply({
+            embeds: [
+              statusEmbed({
+                title: "Schedule",
+                description: "This command only works in a server.",
+                tone: "warn",
+              }),
+            ],
+          });
           return;
         }
 
         const isOwner = interaction.user.id === OWNER_ID;
         if (!isOwner) {
-          await interaction.editReply("Only Snooty can manage schedules 😌");
+          await interaction.editReply({
+            embeds: [
+              statusEmbed({
+                title: "Permission Denied",
+                description: "Only Snooty can manage schedules 😌",
+                tone: "error",
+              }),
+            ],
+          });
           return;
         }
 
@@ -610,17 +738,23 @@ export function registerInteractionCreateHandler({
               interaction.user.id
             );
 
-          await interaction.editReply(
-            [
-              `✅ Scheduled #${result.lastInsertRowid} for <#${channel.id}>.`,
-              `Next run: <t:${sendAt}:F>`,
-              `Repeat: ${
-                repeatMinutes > 0 ? `every ${repeatMinutes} minute(s)` : "one-time"
-              }`,
-              `Media items: ${mediaUrls.length}`,
-              `Debug time: ${scheduleTimeLabel(sendAt)}`,
-            ].join("\n")
-          );
+          await interaction.editReply({
+            embeds: [
+              statusEmbed({
+                title: `Scheduled #${result.lastInsertRowid}`,
+                description: [
+                  `Channel: <#${channel.id}>`,
+                  `Next run: <t:${sendAt}:F>`,
+                  `Repeat: ${
+                    repeatMinutes > 0 ? `every ${repeatMinutes} minute(s)` : "one-time"
+                  }`,
+                  `Media items: ${mediaUrls.length}`,
+                  `Debug time: ${scheduleTimeLabel(sendAt)}`,
+                ].join("\n"),
+                tone: "success",
+              }),
+            ],
+          });
           return;
         }
 
@@ -696,17 +830,24 @@ export function registerInteractionCreateHandler({
               interaction.user.id
             );
 
-          await interaction.editReply(
-            [
-              `✅ Scheduled #${result.lastInsertRowid} from linked message to <#${targetChannel.id}>.`,
-              `Next run: <t:${sendAt}:F>`,
-              `Repeat: ${
-                repeatMinutes > 0 ? `every ${repeatMinutes} minute(s)` : "one-time"
-              }`,
-              `Media items: ${mediaUrls.length}`,
-              `Debug time: ${scheduleTimeLabel(sendAt)}`,
-            ].join("\n")
-          );
+          await interaction.editReply({
+            embeds: [
+              statusEmbed({
+                title: `Scheduled #${result.lastInsertRowid}`,
+                description: [
+                  `Source: linked message`,
+                  `Target: <#${targetChannel.id}>`,
+                  `Next run: <t:${sendAt}:F>`,
+                  `Repeat: ${
+                    repeatMinutes > 0 ? `every ${repeatMinutes} minute(s)` : "one-time"
+                  }`,
+                  `Media items: ${mediaUrls.length}`,
+                  `Debug time: ${scheduleTimeLabel(sendAt)}`,
+                ].join("\n"),
+                tone: "success",
+              }),
+            ],
+          });
           return;
         }
 
@@ -733,7 +874,15 @@ export function registerInteractionCreateHandler({
                 .all(interaction.guildId);
 
           if (rows.length === 0) {
-            await interaction.editReply("No schedules found.");
+            await interaction.editReply({
+              embeds: [
+                statusEmbed({
+                  title: "Schedules",
+                  description: "No schedules found.",
+                  tone: "info",
+                }),
+              ],
+            });
             return;
           }
 
@@ -751,9 +900,15 @@ export function registerInteractionCreateHandler({
             return `#${r.id} | <#${r.channel_id}> | <t:${r.send_at}:R> | ${repeat} | ${status} | media:${mediaCount} | "${preview}"${err}`;
           });
 
-          await interaction.editReply(
-            `**Schedules (latest 30):**\n${lines.join("\n")}`.slice(0, 1900)
-          );
+          await interaction.editReply({
+            embeds: [
+              statusEmbed({
+                title: "Schedules (latest 30)",
+                description: lines.join("\n").slice(0, 3800),
+                tone: "info",
+              }),
+            ],
+          });
           return;
         }
 
@@ -762,9 +917,15 @@ export function registerInteractionCreateHandler({
           const result = db
             .prepare(`DELETE FROM scheduled_messages WHERE id = ? AND guild_id = ?`)
             .run(id, interaction.guildId);
-          await interaction.editReply(
-            result.changes > 0 ? `🧽 Removed schedule #${id}.` : `No schedule #${id} found.`
-          );
+          await interaction.editReply({
+            embeds: [
+              statusEmbed({
+                title: result.changes > 0 ? "Schedule Removed" : "Schedule Not Found",
+                description: result.changes > 0 ? `#${id}` : `No schedule #${id} found.`,
+                tone: result.changes > 0 ? "success" : "warn",
+              }),
+            ],
+          });
           return;
         }
 
@@ -777,9 +938,15 @@ export function registerInteractionCreateHandler({
                WHERE id = ? AND guild_id = ?`
             )
             .run(id, interaction.guildId);
-          await interaction.editReply(
-            result.changes > 0 ? `⏸️ Paused schedule #${id}.` : `No schedule #${id} found.`
-          );
+          await interaction.editReply({
+            embeds: [
+              statusEmbed({
+                title: result.changes > 0 ? "Schedule Paused" : "Schedule Not Found",
+                description: result.changes > 0 ? `#${id}` : `No schedule #${id} found.`,
+                tone: result.changes > 0 ? "warn" : "warn",
+              }),
+            ],
+          });
           return;
         }
 
@@ -794,9 +961,15 @@ export function registerInteractionCreateHandler({
                WHERE id = ? AND guild_id = ?`
             )
             .run(now + 15, now + 15, id, interaction.guildId);
-          await interaction.editReply(
-            result.changes > 0 ? `▶️ Resumed schedule #${id}.` : `No schedule #${id} found.`
-          );
+          await interaction.editReply({
+            embeds: [
+              statusEmbed({
+                title: result.changes > 0 ? "Schedule Resumed" : "Schedule Not Found",
+                description: result.changes > 0 ? `#${id}` : `No schedule #${id} found.`,
+                tone: result.changes > 0 ? "success" : "warn",
+              }),
+            ],
+          });
           return;
         }
 
@@ -808,13 +981,29 @@ export function registerInteractionCreateHandler({
         await safeDefer(interaction, { ephemeral: true });
 
         if (!interaction.guildId) {
-          await interaction.editReply("This command only works in a server.");
+          await interaction.editReply({
+            embeds: [
+              statusEmbed({
+                title: "Purge",
+                description: "This command only works in a server.",
+                tone: "warn",
+              }),
+            ],
+          });
           return;
         }
 
         const isOwner = interaction.user.id === OWNER_ID;
         if (!isOwner) {
-          await interaction.editReply("Only Snooty can run purge commands 😌");
+          await interaction.editReply({
+            embeds: [
+              statusEmbed({
+                title: "Permission Denied",
+                description: "Only Snooty can run purge commands 😌",
+                tone: "error",
+              }),
+            ],
+          });
           return;
         }
 
@@ -833,15 +1022,21 @@ export function registerInteractionCreateHandler({
           );
 
           const result = await purgeMessagesInChannel(channel, sub, scanLimit);
-          await interaction.editReply(
-            [
-              `🧹 Purge complete in <#${channel.id}> (${sub}).`,
-              `Scanned: ${result.scanned}`,
-              `Matched: ${result.matched}`,
-              `Deleted: ${result.deleted}`,
-              `Skipped (older than 14 days): ${result.tooOld}`,
-            ].join("\n")
-          );
+          await interaction.editReply({
+            embeds: [
+              statusEmbed({
+                title: `Purge Complete (${sub})`,
+                description: [
+                  `Channel: <#${channel.id}>`,
+                  `Scanned: ${result.scanned}`,
+                  `Matched: ${result.matched}`,
+                  `Deleted: ${result.deleted}`,
+                  `Skipped (older than 14 days): ${result.tooOld}`,
+                ].join("\n"),
+                tone: "success",
+              }),
+            ],
+          });
           return;
         }
 
@@ -919,15 +1114,21 @@ export function registerInteractionCreateHandler({
             interaction.user.id
           );
 
-          await interaction.editReply(
-            [
-              `✅ Auto-purge set for <#${channel.id}>.`,
-              `Mode: ${mode}`,
-              `Interval: every ${every} ${unit}`,
-              `Scan limit per run: ${scanLimit}`,
-              `Next run: <t:${nextRun}:F>`,
-            ].join("\n")
-          );
+          await interaction.editReply({
+            embeds: [
+              statusEmbed({
+                title: "Auto-Purge Set",
+                description: [
+                  `Channel: <#${channel.id}>`,
+                  `Mode: ${mode}`,
+                  `Interval: every ${every} ${unit}`,
+                  `Scan limit per run: ${scanLimit}`,
+                  `Next run: <t:${nextRun}:F>`,
+                ].join("\n"),
+                tone: "success",
+              }),
+            ],
+          });
           return;
         }
 
@@ -943,7 +1144,15 @@ export function registerInteractionCreateHandler({
             .all(interaction.guildId);
 
           if (rows.length === 0) {
-            await interaction.editReply("No auto-purge rules found.");
+            await interaction.editReply({
+              embeds: [
+                statusEmbed({
+                  title: "Auto-Purge Rules",
+                  description: "No auto-purge rules found.",
+                  tone: "info",
+                }),
+              ],
+            });
             return;
           }
 
@@ -960,9 +1169,15 @@ export function registerInteractionCreateHandler({
             return `#${r.id} | <#${r.channel_id}> | mode:${r.mode} | every ${label} | scan:${r.scan_limit} | next <t:${r.next_run_at}:R> | ${r.active ? "active" : "paused"}${err}`;
           });
 
-          await interaction.editReply(
-            `**Auto-purge rules:**\n${lines.join("\n")}`.slice(0, 1900)
-          );
+          await interaction.editReply({
+            embeds: [
+              statusEmbed({
+                title: "Auto-Purge Rules",
+                description: lines.join("\n").slice(0, 3800),
+                tone: "info",
+              }),
+            ],
+          });
           return;
         }
 
@@ -972,9 +1187,17 @@ export function registerInteractionCreateHandler({
             .prepare(`DELETE FROM auto_purge_rules WHERE id = ? AND guild_id = ?`)
             .run(id, interaction.guildId);
 
-          await interaction.editReply(
-            result.changes > 0 ? `🧽 Removed auto-purge rule #${id}.` : `No rule #${id} found.`
-          );
+          await interaction.editReply({
+            embeds: [
+              statusEmbed({
+                title:
+                  result.changes > 0 ? "Auto-Purge Rule Removed" : "Rule Not Found",
+                description:
+                  result.changes > 0 ? `#${id}` : `No rule #${id} found.`,
+                tone: result.changes > 0 ? "success" : "warn",
+              }),
+            ],
+          });
           return;
         }
 
@@ -1013,25 +1236,57 @@ export function registerInteractionCreateHandler({
 
           setVibe(interaction.user.id, vibe);
 
-          await interaction.editReply("✅ Profile saved. I’ll remember that.");
+          await interaction.editReply({
+            embeds: [
+              statusEmbed({
+                title: "Profile Saved",
+                description: "I’ll remember that.",
+                tone: "success",
+              }),
+            ],
+          });
           return;
         }
 
         if (sub === "show") {
           const row = getProfile(interaction.user.id);
           if (!row) {
-            await interaction.editReply("You don’t have a profile yet. Use `/profile set`.");
+            await interaction.editReply({
+              embeds: [
+                statusEmbed({
+                  title: "Profile",
+                  description: "You don’t have a profile yet. Use `/profile set`.",
+                  tone: "info",
+                }),
+              ],
+            });
             return;
           }
-          await interaction.editReply(
-            `**Your profile note:**\n${row.notes}\n\n**Vibe summary:**\n${row.vibe_summary || "(none)"}`
-          );
+          await interaction.editReply({
+            embeds: [
+              statusEmbed({
+                title: "Your Profile",
+                description: `Profile note:\n${row.notes}\n\nVibe summary:\n${
+                  row.vibe_summary || "(none)"
+                }`.slice(0, 3800),
+                tone: "info",
+              }),
+            ],
+          });
           return;
         }
 
         if (sub === "clear") {
           clearProfile(interaction.user.id);
-          await interaction.editReply("🧽 Profile deleted.");
+          await interaction.editReply({
+            embeds: [
+              statusEmbed({
+                title: "Profile Deleted",
+                description: "Your profile has been removed.",
+                tone: "success",
+              }),
+            ],
+          });
           return;
         }
 
@@ -1042,11 +1297,17 @@ export function registerInteractionCreateHandler({
           }
           const user = interaction.options.getUser("user", true);
           const row = getProfile(user.id);
-          await interaction.editReply(
-            row
-              ? `**Profile for ${user.username}:**\n${row.notes}\n\n**Vibe:**\n${row.vibe_summary || "(none)"}`
-              : `No profile stored for ${user.username}.`
-          );
+          await interaction.editReply({
+            embeds: [
+              statusEmbed({
+                title: `Profile: ${user.username}`,
+                description: row
+                  ? `Profile note:\n${row.notes}\n\nVibe:\n${row.vibe_summary || "(none)"}`
+                  : `No profile stored for ${user.username}.`,
+                tone: "info",
+              }),
+            ],
+          });
           return;
         }
 
@@ -1080,7 +1341,15 @@ export function registerInteractionCreateHandler({
 
           setVibe(user.id, vibe);
 
-          await interaction.editReply(`✅ Profile saved for ${user.username}.`);
+          await interaction.editReply({
+            embeds: [
+              statusEmbed({
+                title: "Profile Saved",
+                description: `Saved for ${user.username}.`,
+                tone: "success",
+              }),
+            ],
+          });
           return;
         }
 
@@ -1091,7 +1360,15 @@ export function registerInteractionCreateHandler({
           }
           const user = interaction.options.getUser("user", true);
           clearProfile(user.id);
-          await interaction.editReply(`🧽 Profile deleted for ${user.username}.`);
+          await interaction.editReply({
+            embeds: [
+              statusEmbed({
+                title: "Profile Deleted",
+                description: `Deleted for ${user.username}.`,
+                tone: "success",
+              }),
+            ],
+          });
           return;
         }
 
