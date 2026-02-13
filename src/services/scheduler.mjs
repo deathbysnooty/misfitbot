@@ -115,7 +115,7 @@ export function createSchedulerService({
       const now = Math.floor(Date.now() / 1000);
       const due = db
         .prepare(
-          `SELECT id, channel_id, content, media_json, send_at, interval_minutes
+          `SELECT id, channel_id, content, media_json, payload_type, embed_json, send_at, interval_minutes
            FROM scheduled_messages
            WHERE active = 1 AND send_at <= ?
            ORDER BY send_at ASC
@@ -136,18 +136,28 @@ export function createSchedulerService({
           } catch {}
           media = Array.isArray(media) ? media.filter(Boolean).slice(0, 10) : [];
 
-          const content = String(row.content || "")
-            .trim()
-            .slice(0, 1900);
+          const content = String(row.content || "").trim().slice(0, 1900);
+          const isEmbed = String(row.payload_type || "text") === "embed";
 
-          if (!content && media.length === 0) {
+          let embed = null;
+          if (isEmbed) {
+            try {
+              const parsed = JSON.parse(row.embed_json || "{}");
+              if (parsed && typeof parsed === "object") embed = parsed;
+            } catch {}
+          }
+
+          if (!content && media.length === 0 && !embed) {
             throw new Error("Scheduled payload is empty.");
           }
 
-          await ch.send({
-            content: content || undefined,
+          const payload = {
+            content: isEmbed ? undefined : content || undefined,
             files: media,
-          });
+          };
+          if (embed) payload.embeds = [embed];
+
+          await ch.send(payload);
 
           if ((row.interval_minutes || 0) > 0) {
             const intervalSec = row.interval_minutes * 60;

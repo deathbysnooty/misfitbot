@@ -50,6 +50,8 @@ export function createDb({ dbPath, defaultBotMode }) {
       channel_id TEXT NOT NULL,
       content TEXT NOT NULL DEFAULT '',
       media_json TEXT NOT NULL DEFAULT '[]',
+      payload_type TEXT NOT NULL DEFAULT 'text',
+      embed_json TEXT NOT NULL DEFAULT '',
       send_at INTEGER NOT NULL,
       interval_minutes INTEGER NOT NULL DEFAULT 0,
       active INTEGER NOT NULL DEFAULT 1,
@@ -86,6 +88,16 @@ export function createDb({ dbPath, defaultBotMode }) {
     "auto_purge_rules",
     "interval_seconds",
     "interval_seconds INTEGER NOT NULL DEFAULT 0"
+  );
+  ensureColumn(
+    "scheduled_messages",
+    "payload_type",
+    "payload_type TEXT NOT NULL DEFAULT 'text'"
+  );
+  ensureColumn(
+    "scheduled_messages",
+    "embed_json",
+    "embed_json TEXT NOT NULL DEFAULT ''"
   );
 
   db.exec(`

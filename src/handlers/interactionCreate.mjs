@@ -1,4 +1,11 @@
-import { AttachmentBuilder, EmbedBuilder } from "discord.js";
+import {
+  AttachmentBuilder,
+  EmbedBuilder,
+  ModalBuilder,
+  ActionRowBuilder,
+  TextInputBuilder,
+  TextInputStyle,
+} from "discord.js";
 
 export function registerInteractionCreateHandler({
   client,
@@ -55,6 +62,42 @@ export function registerInteractionCreateHandler({
       .setColor(EMBED_COLORS[tone] || EMBED_COLORS.info)
       .setTitle(title)
       .setDescription(String(description || "").slice(0, 4000));
+  }
+
+  const pendingScheduleEmbedModal = new Map();
+  const pendingScheduleTextModal = new Map();
+  const pendingWelcomeSetModal = new Map();
+  const pendingProfileSetModal = new Map();
+  const pendingProfileSetForModal = new Map();
+
+  function cleanupPending(map, maxAgeMs = 20 * 60 * 1000) {
+    const now = Date.now();
+    for (const [k, v] of map.entries()) {
+      if (now - (v?.createdAt || 0) > maxAgeMs) map.delete(k);
+    }
+  }
+
+  function parseEmbedColor(input) {
+    const raw = String(input || "").trim();
+    if (!raw) return EMBED_COLORS.info;
+    const hex = raw.replace(/^#/, "").toUpperCase();
+    if (!/^[0-9A-F]{6}$/.test(hex)) return null;
+    return parseInt(hex, 16);
+  }
+
+  async function generateVibeSummary(note) {
+    const vibeResp = await openai.chat.completions.create({
+      model: "gpt-4.1-mini",
+      messages: [
+        {
+          role: "system",
+          content:
+            "Turn this note into a short neutral vibe summary (1–2 lines). No negative judgments, no sensitive inferences.",
+        },
+        { role: "user", content: note },
+      ],
+    });
+    return vibeResp.choices?.[0]?.message?.content?.trim().slice(0, 280) || "";
   }
 
   async function resolveTargetMessageFromSlash(interaction, optionName = "message") {
@@ -301,6 +344,393 @@ export function registerInteractionCreateHandler({
 
   client.on("interactionCreate", async (interaction) => {
     try {
+      if (interaction.isModalSubmit()) {
+        const cid = interaction.customId;
+
+        if (cid.startsWith("schedule_embed:")) {
+          const token = cid.slice("schedule_embed:".length);
+          const pending = pendingScheduleEmbedModal.get(token);
+          if (!pending) {
+            await interaction.reply({
+              embeds: [
+                statusEmbed({
+                  title: "Schedule Form Expired",
+                  description: "Please run `/schedule addembed` again.",
+                  tone: "warn",
+                }),
+              ],
+              ephemeral: true,
+            });
+            return;
+          }
+
+          if (
+            pending.userId !== interaction.user.id ||
+            pending.guildId !== interaction.guildId
+          ) {
+            await interaction.reply({
+              embeds: [
+                statusEmbed({
+                  title: "Schedule Form Invalid",
+                  description: "This form does not belong to you.",
+                  tone: "error",
+                }),
+              ],
+              ephemeral: true,
+            });
+            return;
+          }
+
+          const title = interaction.fields.getTextInputValue("title").trim().slice(0, 256);
+          const description = interaction.fields
+            .getTextInputValue("description")
+            .trim()
+            .slice(0, 4000);
+          const colorRaw = interaction.fields.getTextInputValue("color").trim();
+          const footer = interaction.fields
+            .getTextInputValue("footer")
+            .trim()
+            .slice(0, 2048);
+          const mediaRaw = interaction.fields.getTextInputValue("media_urls").trim();
+
+          const color = parseEmbedColor(colorRaw);
+          if (color === null) {
+            await interaction.reply({
+              embeds: [
+                statusEmbed({
+                  title: "Invalid Color",
+                  description: "Use 6-digit hex like `#5865F2`.",
+                  tone: "warn",
+                }),
+              ],
+              ephemeral: true,
+            });
+            return;
+          }
+
+          const mediaUrls = parseMediaUrlsInput(mediaRaw).slice(0, 10);
+
+          const embedPayload = {
+            title: title || undefined,
+            description: description || undefined,
+            color,
+            footer: footer ? { text: footer } : undefined,
+          };
+
+          if (!embedPayload.title && !embedPayload.description) {
+            await interaction.reply({
+              embeds: [
+                statusEmbed({
+                  title: "Embed Is Empty",
+                  description: "Add a title or description.",
+                  tone: "warn",
+                }),
+              ],
+              ephemeral: true,
+            });
+            return;
+          }
+
+          const previewText = description || title || "";
+          const result = db
+            .prepare(`
+              INSERT INTO scheduled_messages (
+                guild_id, channel_id, content, media_json, payload_type, embed_json, send_at,
+                interval_minutes, active, last_error, created_by, created_at, updated_at
+              )
+              VALUES (?, ?, ?, ?, 'embed', ?, ?, ?, 1, '', ?, strftime('%s','now'), strftime('%s','now'))
+            `)
+            .run(
+              pending.guildId,
+              pending.channelId,
+              previewText.slice(0, 1800),
+              JSON.stringify(mediaUrls),
+              JSON.stringify(embedPayload),
+              pending.sendAt,
+              pending.repeatMinutes,
+              interaction.user.id
+            );
+
+          pendingScheduleEmbedModal.delete(token);
+
+          await interaction.reply({
+            embeds: [
+              statusEmbed({
+                title: `Scheduled #${result.lastInsertRowid}`,
+                description: [
+                  `Type: embed`,
+                  `Channel: <#${pending.channelId}>`,
+                  `Next run: <t:${pending.sendAt}:F>`,
+                  `Repeat: ${
+                    pending.repeatMinutes > 0
+                      ? `every ${pending.repeatMinutes} minute(s)`
+                      : "one-time"
+                  }`,
+                  `Media items: ${mediaUrls.length}`,
+                ].join("\n"),
+                tone: "success",
+              }),
+            ],
+            ephemeral: true,
+          });
+          return;
+        }
+
+        if (cid.startsWith("schedule_text:")) {
+          const token = cid.slice("schedule_text:".length);
+          const pending = pendingScheduleTextModal.get(token);
+          if (!pending) {
+            await interaction.reply({
+              embeds: [
+                statusEmbed({
+                  title: "Schedule Form Expired",
+                  description: "Please run `/schedule addtext` again.",
+                  tone: "warn",
+                }),
+              ],
+              ephemeral: true,
+            });
+            return;
+          }
+          if (
+            pending.userId !== interaction.user.id ||
+            pending.guildId !== interaction.guildId
+          ) {
+            await interaction.reply({
+              embeds: [
+                statusEmbed({
+                  title: "Schedule Form Invalid",
+                  description: "This form does not belong to you.",
+                  tone: "error",
+                }),
+              ],
+              ephemeral: true,
+            });
+            return;
+          }
+
+          const content = interaction.fields
+            .getTextInputValue("message")
+            .trim()
+            .slice(0, 1800);
+          const mediaUrls = parseMediaUrlsInput(
+            interaction.fields.getTextInputValue("media_urls").trim()
+          ).slice(0, 10);
+
+          if (!content && mediaUrls.length === 0) {
+            await interaction.reply({
+              embeds: [
+                statusEmbed({
+                  title: "Schedule Text",
+                  description: "Provide message text or media URLs.",
+                  tone: "warn",
+                }),
+              ],
+              ephemeral: true,
+            });
+            return;
+          }
+
+          const result = db
+            .prepare(`
+              INSERT INTO scheduled_messages (
+                guild_id, channel_id, content, media_json, send_at,
+                interval_minutes, active, last_error, created_by, created_at, updated_at
+              )
+              VALUES (?, ?, ?, ?, ?, ?, 1, '', ?, strftime('%s','now'), strftime('%s','now'))
+            `)
+            .run(
+              pending.guildId,
+              pending.channelId,
+              content,
+              JSON.stringify(mediaUrls),
+              pending.sendAt,
+              pending.repeatMinutes,
+              interaction.user.id
+            );
+          pendingScheduleTextModal.delete(token);
+
+          await interaction.reply({
+            embeds: [
+              statusEmbed({
+                title: `Scheduled #${result.lastInsertRowid}`,
+                description: [
+                  `Type: text`,
+                  `Channel: <#${pending.channelId}>`,
+                  `Next run: <t:${pending.sendAt}:F>`,
+                  `Repeat: ${
+                    pending.repeatMinutes > 0
+                      ? `every ${pending.repeatMinutes} minute(s)`
+                      : "one-time"
+                  }`,
+                  `Media items: ${mediaUrls.length}`,
+                ].join("\n"),
+                tone: "success",
+              }),
+            ],
+            ephemeral: true,
+          });
+          return;
+        }
+
+        if (cid.startsWith("welcome_set:")) {
+          const token = cid.slice("welcome_set:".length);
+          const pending = pendingWelcomeSetModal.get(token);
+          if (!pending) {
+            await interaction.reply({
+              embeds: [
+                statusEmbed({
+                  title: "Welcome Form Expired",
+                  description: "Please run `/welcome set` again.",
+                  tone: "warn",
+                }),
+              ],
+              ephemeral: true,
+            });
+            return;
+          }
+          if (
+            pending.userId !== interaction.user.id ||
+            pending.guildId !== interaction.guildId
+          ) {
+            await interaction.reply({
+              embeds: [
+                statusEmbed({
+                  title: "Welcome Form Invalid",
+                  description: "This form does not belong to you.",
+                  tone: "error",
+                }),
+              ],
+              ephemeral: true,
+            });
+            return;
+          }
+          const message = interaction.fields
+            .getTextInputValue("message")
+            .trim()
+            .slice(0, 1800);
+          if (!message) {
+            await interaction.reply({
+              embeds: [
+                statusEmbed({
+                  title: "Welcome Config",
+                  description: "Message cannot be empty.",
+                  tone: "warn",
+                }),
+              ],
+              ephemeral: true,
+            });
+            return;
+          }
+          upsertWelcomeConfig(
+            pending.guildId,
+            pending.channelId,
+            message,
+            interaction.user.id
+          );
+          pendingWelcomeSetModal.delete(token);
+
+          const preview = formatWelcomeMessage(
+            message,
+            interaction.guild?.name || "this server",
+            interaction.user.id,
+            WELCOME_MESSAGE
+          );
+
+          await interaction.reply({
+            embeds: [
+              statusEmbed({
+                title: "Welcome Config Saved",
+                description: `Channel: <#${pending.channelId}>\n\nPreview:\n${preview}`.slice(
+                  0,
+                  1900
+                ),
+                tone: "success",
+              }),
+            ],
+            ephemeral: true,
+          });
+          return;
+        }
+
+        if (cid.startsWith("profile_setfor:") || cid.startsWith("profile_set:")) {
+          const isSetFor = cid.startsWith("profile_setfor:");
+          const token = cid.slice((isSetFor ? "profile_setfor:" : "profile_set:").length);
+          const pending = isSetFor
+            ? pendingProfileSetForModal.get(token)
+            : pendingProfileSetModal.get(token);
+
+          if (!pending) {
+            await interaction.reply({
+              embeds: [
+                statusEmbed({
+                  title: "Profile Form Expired",
+                  description: "Please run the profile command again.",
+                  tone: "warn",
+                }),
+              ],
+              ephemeral: true,
+            });
+            return;
+          }
+          if (
+            pending.userId !== interaction.user.id ||
+            pending.guildId !== (interaction.guildId || "")
+          ) {
+            await interaction.reply({
+              embeds: [
+                statusEmbed({
+                  title: "Profile Form Invalid",
+                  description: "This form does not belong to you.",
+                  tone: "error",
+                }),
+              ],
+              ephemeral: true,
+            });
+            return;
+          }
+
+          const note = interaction.fields.getTextInputValue("note").trim().slice(0, 1200);
+          if (!note) {
+            await interaction.reply({
+              embeds: [
+                statusEmbed({
+                  title: "Profile",
+                  description: "Note cannot be empty.",
+                  tone: "warn",
+                }),
+              ],
+              ephemeral: true,
+            });
+            return;
+          }
+
+          const targetUserId = isSetFor ? pending.targetUserId : interaction.user.id;
+          upsertProfile(targetUserId, note);
+          const vibe = await generateVibeSummary(note);
+          setVibe(targetUserId, vibe);
+
+          if (isSetFor) pendingProfileSetForModal.delete(token);
+          else pendingProfileSetModal.delete(token);
+
+          await interaction.reply({
+            embeds: [
+              statusEmbed({
+                title: "Profile Saved",
+                description: isSetFor
+                  ? `Saved for <@${targetUserId}>.`
+                  : "I’ll remember that.",
+                tone: "success",
+              }),
+            ],
+            ephemeral: true,
+          });
+          return;
+        }
+
+        return;
+      }
+
       if (interaction.isMessageContextMenuCommand()) {
         await safeDefer(interaction);
 
@@ -426,10 +856,8 @@ export function registerInteractionCreateHandler({
       }
 
       if (interaction.commandName === "welcome") {
-        await safeDefer(interaction, { ephemeral: true });
-
         if (!interaction.guildId) {
-          await interaction.editReply({
+          await interaction.reply({
             embeds: [
               statusEmbed({
                 title: "Welcome Config",
@@ -437,13 +865,14 @@ export function registerInteractionCreateHandler({
                 tone: "warn",
               }),
             ],
+            ephemeral: true,
           });
           return;
         }
 
         const isOwner = interaction.user.id === OWNER_ID;
         if (!isOwner) {
-          await interaction.editReply({
+          await interaction.reply({
             embeds: [
               statusEmbed({
                 title: "Permission Denied",
@@ -451,6 +880,7 @@ export function registerInteractionCreateHandler({
                 tone: "error",
               }),
             ],
+            ephemeral: true,
           });
           return;
         }
@@ -459,13 +889,8 @@ export function registerInteractionCreateHandler({
 
         if (sub === "set") {
           const channel = interaction.options.getChannel("channel", true);
-          const message = interaction.options
-            .getString("message", true)
-            .trim()
-            .slice(0, 1800);
-
           if (!channel.isTextBased()) {
-            await interaction.editReply({
+            await interaction.reply({
               embeds: [
                 statusEmbed({
                   title: "Welcome Config",
@@ -473,19 +898,55 @@ export function registerInteractionCreateHandler({
                   tone: "warn",
                 }),
               ],
+              ephemeral: true,
             });
             return;
           }
 
+          const messageArg = (interaction.options.getString("message") || "")
+            .trim()
+            .slice(0, 1800);
+
+          if (!messageArg) {
+            const token = `${Date.now().toString(36)}${Math.random()
+              .toString(36)
+              .slice(2, 10)}`;
+            cleanupPending(pendingWelcomeSetModal);
+            pendingWelcomeSetModal.set(token, {
+              createdAt: Date.now(),
+              userId: interaction.user.id,
+              guildId: interaction.guildId,
+              channelId: channel.id,
+            });
+
+            const modal = new ModalBuilder()
+              .setCustomId(`welcome_set:${token}`)
+              .setTitle("Set Welcome Message");
+
+            const messageInput = new TextInputBuilder()
+              .setCustomId("message")
+              .setLabel("Welcome template ({user}, {guild}, \\n)")
+              .setStyle(TextInputStyle.Paragraph)
+              .setRequired(true)
+              .setMaxLength(1800)
+              .setPlaceholder("Welcome {user} to {guild}!");
+
+            modal.addComponents(new ActionRowBuilder().addComponents(messageInput));
+            await interaction.showModal(modal);
+            return;
+          }
+
+          await safeDefer(interaction, { ephemeral: true });
+
           upsertWelcomeConfig(
             interaction.guildId,
             channel.id,
-            message,
+            messageArg,
             interaction.user.id
           );
 
           const preview = formatWelcomeMessage(
-            message,
+            messageArg,
             interaction.guild?.name || "this server",
             interaction.user.id,
             WELCOME_MESSAGE
@@ -505,6 +966,8 @@ export function registerInteractionCreateHandler({
           });
           return;
         }
+
+        await safeDefer(interaction, { ephemeral: true });
 
         if (sub === "show") {
           const cfg = getWelcomeConfig(interaction.guildId);
@@ -649,10 +1112,8 @@ export function registerInteractionCreateHandler({
       }
 
       if (interaction.commandName === "schedule") {
-        await safeDefer(interaction, { ephemeral: true });
-
         if (!interaction.guildId) {
-          await interaction.editReply({
+          await interaction.reply({
             embeds: [
               statusEmbed({
                 title: "Schedule",
@@ -660,13 +1121,14 @@ export function registerInteractionCreateHandler({
                 tone: "warn",
               }),
             ],
+            ephemeral: true,
           });
           return;
         }
 
         const isOwner = interaction.user.id === OWNER_ID;
         if (!isOwner) {
-          await interaction.editReply({
+          await interaction.reply({
             embeds: [
               statusEmbed({
                 title: "Permission Denied",
@@ -674,12 +1136,239 @@ export function registerInteractionCreateHandler({
                 tone: "error",
               }),
             ],
+            ephemeral: true,
           });
           return;
         }
 
         const sub = interaction.options.getSubcommand();
         const now = Math.floor(Date.now() / 1000);
+
+        if (sub === "addembed") {
+          const channel = interaction.options.getChannel("channel", true);
+          if (!channel.isTextBased()) {
+            await interaction.reply({
+              embeds: [
+                statusEmbed({
+                  title: "Schedule Embed",
+                  description: "Pick a text channel.",
+                  tone: "warn",
+                }),
+              ],
+              ephemeral: true,
+            });
+            return;
+          }
+
+          const whenRaw = interaction.options.getString("when", true);
+          const sendAt = parseScheduleTimeToUnixSeconds(whenRaw);
+          if (!sendAt) {
+            await interaction.reply({
+              embeds: [
+                statusEmbed({
+                  title: "Invalid Time",
+                  description:
+                    "Use ISO UTC, unix, `dd/hh/mm` (like `01/02/30`), `hh/mm`, or token form like `1d2h30m`.",
+                  tone: "warn",
+                }),
+              ],
+              ephemeral: true,
+            });
+            return;
+          }
+          if (sendAt <= now + 5) {
+            await interaction.reply({
+              embeds: [
+                statusEmbed({
+                  title: "Invalid Time",
+                  description: "`when` must be in the future.",
+                  tone: "warn",
+                }),
+              ],
+              ephemeral: true,
+            });
+            return;
+          }
+
+          let repeatMinutes = interaction.options.getInteger("repeat_minutes") || 0;
+          if (repeatMinutes < 0) repeatMinutes = 0;
+          if (repeatMinutes > 43200) {
+            await interaction.reply({
+              embeds: [
+                statusEmbed({
+                  title: "Invalid Repeat",
+                  description: "`repeat_minutes` max is 43200 (30 days).",
+                  tone: "warn",
+                }),
+              ],
+              ephemeral: true,
+            });
+            return;
+          }
+
+          const token = `${Date.now().toString(36)}${Math.random()
+            .toString(36)
+            .slice(2, 10)}`;
+          cleanupPending(pendingScheduleEmbedModal);
+          pendingScheduleEmbedModal.set(token, {
+            createdAt: Date.now(),
+            userId: interaction.user.id,
+            guildId: interaction.guildId,
+            channelId: channel.id,
+            sendAt,
+            repeatMinutes,
+          });
+
+          const modal = new ModalBuilder()
+            .setCustomId(`schedule_embed:${token}`)
+            .setTitle("Schedule Embedded Message");
+
+          const titleInput = new TextInputBuilder()
+            .setCustomId("title")
+            .setLabel("Embed Title (optional)")
+            .setStyle(TextInputStyle.Short)
+            .setRequired(false)
+            .setMaxLength(256);
+
+          const descriptionInput = new TextInputBuilder()
+            .setCustomId("description")
+            .setLabel("Embed Description (required)")
+            .setStyle(TextInputStyle.Paragraph)
+            .setRequired(true)
+            .setMaxLength(4000);
+
+          const colorInput = new TextInputBuilder()
+            .setCustomId("color")
+            .setLabel("Color Hex (optional, e.g. #5865F2)")
+            .setStyle(TextInputStyle.Short)
+            .setRequired(false)
+            .setValue("#5865F2")
+            .setMaxLength(7);
+
+          const footerInput = new TextInputBuilder()
+            .setCustomId("footer")
+            .setLabel("Footer (optional)")
+            .setStyle(TextInputStyle.Short)
+            .setRequired(false)
+            .setMaxLength(2048);
+
+          const mediaInput = new TextInputBuilder()
+            .setCustomId("media_urls")
+            .setLabel("Media URLs (optional, comma or space separated)")
+            .setStyle(TextInputStyle.Paragraph)
+            .setRequired(false)
+            .setMaxLength(1000);
+
+          modal.addComponents(
+            new ActionRowBuilder().addComponents(titleInput),
+            new ActionRowBuilder().addComponents(descriptionInput),
+            new ActionRowBuilder().addComponents(colorInput),
+            new ActionRowBuilder().addComponents(footerInput),
+            new ActionRowBuilder().addComponents(mediaInput)
+          );
+
+          await interaction.showModal(modal);
+          return;
+        }
+
+        if (sub === "addtext") {
+          const channel = interaction.options.getChannel("channel", true);
+          if (!channel.isTextBased()) {
+            await interaction.reply({
+              embeds: [
+                statusEmbed({
+                  title: "Schedule Text",
+                  description: "Pick a text channel.",
+                  tone: "warn",
+                }),
+              ],
+              ephemeral: true,
+            });
+            return;
+          }
+
+          const whenRaw = interaction.options.getString("when", true);
+          const sendAt = parseScheduleTimeToUnixSeconds(whenRaw);
+          if (!sendAt || sendAt <= now + 5) {
+            await interaction.reply({
+              embeds: [
+                statusEmbed({
+                  title: "Invalid Time",
+                  description:
+                    "Use a future time. Supported: ISO UTC, unix, `dd/hh/mm`, `hh/mm`, or `1d2h30m`.",
+                  tone: "warn",
+                }),
+              ],
+              ephemeral: true,
+            });
+            return;
+          }
+
+          let repeatMinutes = interaction.options.getInteger("repeat_minutes") || 0;
+          if (repeatMinutes < 0) repeatMinutes = 0;
+          if (repeatMinutes > 43200) {
+            await interaction.reply({
+              embeds: [
+                statusEmbed({
+                  title: "Invalid Repeat",
+                  description: "`repeat_minutes` max is 43200 (30 days).",
+                  tone: "warn",
+                }),
+              ],
+              ephemeral: true,
+            });
+            return;
+          }
+
+          const contentArg = (interaction.options.getString("message") || "")
+            .trim()
+            .slice(0, 1800);
+          const mediaArg = parseMediaUrlsInput(
+            interaction.options.getString("media_urls") || ""
+          ).slice(0, 10);
+
+          if (!contentArg && mediaArg.length === 0) {
+            const token = `${Date.now().toString(36)}${Math.random()
+              .toString(36)
+              .slice(2, 10)}`;
+            cleanupPending(pendingScheduleTextModal);
+            pendingScheduleTextModal.set(token, {
+              createdAt: Date.now(),
+              userId: interaction.user.id,
+              guildId: interaction.guildId,
+              channelId: channel.id,
+              sendAt,
+              repeatMinutes,
+            });
+
+            const modal = new ModalBuilder()
+              .setCustomId(`schedule_text:${token}`)
+              .setTitle("Schedule Text Message");
+
+            const messageInput = new TextInputBuilder()
+              .setCustomId("message")
+              .setLabel("Message text (optional)")
+              .setStyle(TextInputStyle.Paragraph)
+              .setRequired(false)
+              .setMaxLength(1800);
+
+            const mediaInput = new TextInputBuilder()
+              .setCustomId("media_urls")
+              .setLabel("Media URLs (optional, comma or space separated)")
+              .setStyle(TextInputStyle.Paragraph)
+              .setRequired(false)
+              .setMaxLength(1000);
+
+            modal.addComponents(
+              new ActionRowBuilder().addComponents(messageInput),
+              new ActionRowBuilder().addComponents(mediaInput)
+            );
+            await interaction.showModal(modal);
+            return;
+          }
+        }
+
+        await safeDefer(interaction, { ephemeral: true });
 
         if (sub === "addtext") {
           const channel = interaction.options.getChannel("channel", true);
@@ -856,7 +1545,7 @@ export function registerInteractionCreateHandler({
           const rows = channel
             ? db
                 .prepare(
-                  `SELECT id, channel_id, send_at, interval_minutes, active, content, media_json, last_error
+                  `SELECT id, channel_id, send_at, interval_minutes, payload_type, active, content, media_json, last_error
                    FROM scheduled_messages
                    WHERE guild_id = ? AND channel_id = ?
                    ORDER BY id DESC
@@ -865,7 +1554,7 @@ export function registerInteractionCreateHandler({
                 .all(interaction.guildId, channel.id)
             : db
                 .prepare(
-                  `SELECT id, channel_id, send_at, interval_minutes, active, content, media_json, last_error
+                  `SELECT id, channel_id, send_at, interval_minutes, payload_type, active, content, media_json, last_error
                    FROM scheduled_messages
                    WHERE guild_id = ?
                    ORDER BY id DESC
@@ -897,7 +1586,8 @@ export function registerInteractionCreateHandler({
               r.interval_minutes > 0 ? `every ${r.interval_minutes}m` : "one-time";
             const status = r.active ? "active" : "paused/done";
             const err = r.last_error ? ` | err: ${String(r.last_error).slice(0, 40)}` : "";
-            return `#${r.id} | <#${r.channel_id}> | <t:${r.send_at}:R> | ${repeat} | ${status} | media:${mediaCount} | "${preview}"${err}`;
+            const kind = r.payload_type === "embed" ? "embed" : "text";
+            return `#${r.id} | <#${r.channel_id}> | <t:${r.send_at}:R> | ${repeat} | ${status} | type:${kind} | media:${mediaCount} | "${preview}"${err}`;
           });
 
           await interaction.editReply({
@@ -1206,33 +1896,88 @@ export function registerInteractionCreateHandler({
       }
 
       if (interaction.commandName === "profile") {
-        await safeDefer(interaction, { ephemeral: true });
-
         const sub = interaction.options.getSubcommand();
         const isOwner = interaction.user.id === OWNER_ID;
 
         if (sub === "set") {
+          const noteArg = (interaction.options.getString("note") || "")
+            .trim()
+            .slice(0, 1200);
+          if (!noteArg) {
+            const token = `${Date.now().toString(36)}${Math.random()
+              .toString(36)
+              .slice(2, 10)}`;
+            cleanupPending(pendingProfileSetModal);
+            pendingProfileSetModal.set(token, {
+              createdAt: Date.now(),
+              userId: interaction.user.id,
+              guildId: interaction.guildId || "",
+            });
+
+            const modal = new ModalBuilder()
+              .setCustomId(`profile_set:${token}`)
+              .setTitle("Set Profile Note");
+            const noteInput = new TextInputBuilder()
+              .setCustomId("note")
+              .setLabel("Profile note")
+              .setStyle(TextInputStyle.Paragraph)
+              .setRequired(true)
+              .setMaxLength(1200);
+            modal.addComponents(new ActionRowBuilder().addComponents(noteInput));
+            await interaction.showModal(modal);
+            return;
+          }
+        }
+
+        if (sub === "setfor") {
+          if (!isOwner) {
+            await interaction.reply({
+              content: "Only Snooty can set profiles for others 😌",
+              ephemeral: true,
+            });
+            return;
+          }
+          const user = interaction.options.getUser("user", true);
+          const noteArg = (interaction.options.getString("note") || "")
+            .trim()
+            .slice(0, 1200);
+          if (!noteArg) {
+            const token = `${Date.now().toString(36)}${Math.random()
+              .toString(36)
+              .slice(2, 10)}`;
+            cleanupPending(pendingProfileSetForModal);
+            pendingProfileSetForModal.set(token, {
+              createdAt: Date.now(),
+              userId: interaction.user.id,
+              guildId: interaction.guildId || "",
+              targetUserId: user.id,
+            });
+            const modal = new ModalBuilder()
+              .setCustomId(`profile_setfor:${token}`)
+              .setTitle(`Set Profile: ${user.username}`);
+            const noteInput = new TextInputBuilder()
+              .setCustomId("note")
+              .setLabel("Profile note")
+              .setStyle(TextInputStyle.Paragraph)
+              .setRequired(true)
+              .setMaxLength(1200);
+            modal.addComponents(new ActionRowBuilder().addComponents(noteInput));
+            await interaction.showModal(modal);
+            return;
+          }
+        }
+
+        await safeDefer(interaction, { ephemeral: true });
+
+        if (sub === "set") {
           const note = interaction.options
-            .getString("note", true)
+            .getString("note")
             .trim()
             .slice(0, 1200);
 
           upsertProfile(interaction.user.id, note);
 
-          const vibeResp = await openai.chat.completions.create({
-            model: "gpt-4.1-mini",
-            messages: [
-              {
-                role: "system",
-                content:
-                  "Turn this note into a short neutral vibe summary (1–2 lines). No negative judgments, no sensitive inferences.",
-              },
-              { role: "user", content: note },
-            ],
-          });
-
-          const vibe =
-            vibeResp.choices?.[0]?.message?.content?.trim().slice(0, 280) || "";
+          const vibe = await generateVibeSummary(note);
 
           setVibe(interaction.user.id, vibe);
 
@@ -1318,26 +2063,13 @@ export function registerInteractionCreateHandler({
           }
           const user = interaction.options.getUser("user", true);
           const note = interaction.options
-            .getString("note", true)
+            .getString("note")
             .trim()
             .slice(0, 1200);
 
           upsertProfile(user.id, note);
 
-          const vibeResp = await openai.chat.completions.create({
-            model: "gpt-4.1-mini",
-            messages: [
-              {
-                role: "system",
-                content:
-                  "Turn this note into a short neutral vibe summary (1–2 lines). No negative judgments, no sensitive inferences.",
-              },
-              { role: "user", content: note },
-            ],
-          });
-
-          const vibe =
-            vibeResp.choices?.[0]?.message?.content?.trim().slice(0, 280) || "";
+          const vibe = await generateVibeSummary(note);
 
           setVibe(user.id, vibe);
 
