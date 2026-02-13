@@ -1254,7 +1254,7 @@ export function registerInteractionCreateHandler({
 
           const mediaInput = new TextInputBuilder()
             .setCustomId("media_urls")
-            .setLabel("Media URLs (optional, comma or space separated)")
+            .setLabel("Media URLs (optional)")
             .setStyle(TextInputStyle.Paragraph)
             .setRequired(false)
             .setMaxLength(1000);
@@ -1354,7 +1354,7 @@ export function registerInteractionCreateHandler({
 
             const mediaInput = new TextInputBuilder()
               .setCustomId("media_urls")
-              .setLabel("Media URLs (optional, comma or space separated)")
+              .setLabel("Media URLs (optional)")
               .setStyle(TextInputStyle.Paragraph)
               .setRequired(false)
               .setMaxLength(1000);
