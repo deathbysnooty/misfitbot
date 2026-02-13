@@ -437,6 +437,17 @@ async function generateImageFromPrompt(prompt) {
   return Buffer.from(b64, "base64");
 }
 
+async function generateVoiceFromText(text, voice = "alloy") {
+  const tts = await openai.audio.speech.create({
+    model: "gpt-4o-mini-tts",
+    voice,
+    input: text,
+    format: "mp3",
+  });
+
+  return Buffer.from(await tts.arrayBuffer());
+}
+
 function formatMessageForChannelSummary(m) {
   const content = (m.content || "").trim();
   const parts = [];
@@ -565,6 +576,32 @@ async function registerCommands() {
           description: "How many recent messages? (1–100)",
           type: 4,
           required: true,
+        },
+      ],
+    },
+    {
+      name: "voicenote",
+      description: "Convert text into a voice-note style audio file.",
+      options: [
+        {
+          name: "text",
+          description: "Text to speak",
+          type: 3,
+          required: true,
+        },
+        {
+          name: "voice",
+          description: "Voice style",
+          type: 3,
+          required: false,
+          choices: [
+            { name: "alloy", value: "alloy" },
+            { name: "nova", value: "nova" },
+            { name: "onyx", value: "onyx" },
+            { name: "echo", value: "echo" },
+            { name: "fable", value: "fable" },
+            { name: "shimmer", value: "shimmer" },
+          ],
         },
       ],
     },
@@ -716,6 +753,7 @@ async function registerCommands() {
     { name: "Misfit: Explain", type: ApplicationCommandType.Message },
     { name: "Misfit: Analyze Image", type: ApplicationCommandType.Message },
     { name: "Misfit: Transcribe Voice", type: ApplicationCommandType.Message },
+    { name: "Misfit: Voice Note", type: ApplicationCommandType.Message },
   ];
 
   try {
@@ -872,6 +910,36 @@ client.on("messageCreate", async (message) => {
       return;
     }
 
+    // Reply + mention: convert replied text to voice note.
+    // Example: reply to message, then send "@MisfitBot voicenote nova"
+    const voiceFromReplyMatch = userText.match(
+      /^voice(?:\s*note)?(?:\s+(alloy|nova|onyx|echo|fable|shimmer))?$/i
+    );
+    if (voiceFromReplyMatch && repliedMsg) {
+      const text = (repliedMsg.content || "").trim();
+      if (!text) {
+        await message.reply("That replied message has no text to read 😌");
+        return;
+      }
+
+      const voice = (voiceFromReplyMatch[1] || "alloy").toLowerCase();
+      await message.channel.sendTyping();
+      try {
+        const mp3Buf = await generateVoiceFromText(text, voice);
+        const file = new AttachmentBuilder(mp3Buf, {
+          name: "misfit-voicenote.mp3",
+        });
+        await message.reply({
+          content: `🎙️ Voice note ready (${voice}).`,
+          files: [file],
+        });
+      } catch (e) {
+        console.error("Voice note (mention/reply) failed:", e);
+        await message.reply("⚠️ I couldn’t generate that voice note 😭");
+      }
+      return;
+    }
+
     // If no prompt but audio exists -> transcribe + explain
     if (!userText && audioAtts.length > 0) {
       await message.channel.sendTyping();
@@ -954,6 +1022,7 @@ function helpText() {
     "**Tag me:**",
     "• `@MisfitBot <question>` — ask normally",
     "• Reply to an image/voice note and tag me — I’ll analyze/transcribe",
+    "• Reply to text and tag me with `voicenote` or `voicenote nova`",
     "",
     "**Owner memory (Snooty only):**",
     "• `@MisfitBot mem set @User <notes>`",
@@ -979,9 +1048,10 @@ function helpText() {
     "• `/transcribe [message:<link>] [explain:true]`",
     "• `/imagine prompt:<text>`",
     "• `/summarizechannel count:<1-100>`",
+    "• `/voicenote text:<text> [voice]`",
     "",
     "**Right-click a message → Apps:**",
-    "• Misfit: Summarize / Explain / Analyze Image / Transcribe Voice",
+    "• Misfit: Summarize / Explain / Analyze Image / Transcribe Voice / Voice Note",
   ].join("\n");
 }
 
@@ -1057,6 +1127,25 @@ client.on("interactionCreate", async (interaction) => {
             1900
           )
         );
+        return;
+      }
+
+      if (interaction.commandName === "Misfit: Voice Note") {
+        const text = (targetMsg.content || "").trim();
+        if (!text) {
+          await interaction.editReply("No text found in that message 😌");
+          return;
+        }
+
+        const mp3Buf = await generateVoiceFromText(text, "alloy");
+        const file = new AttachmentBuilder(mp3Buf, {
+          name: "misfit-voicenote.mp3",
+        });
+
+        await interaction.editReply({
+          content: "🎙️ Voice note ready (alloy).",
+          files: [file],
+        });
         return;
       }
 
@@ -1362,6 +1451,20 @@ client.on("interactionCreate", async (interaction) => {
           0,
           1800
         ),
+        files: [file],
+      });
+      return;
+    }
+
+    if (interaction.commandName === "voicenote") {
+      const text = interaction.options.getString("text", true).trim().slice(0, 3000);
+      const voice = (interaction.options.getString("voice") || "alloy").toLowerCase();
+
+      const mp3Buf = await generateVoiceFromText(text, voice);
+      const file = new AttachmentBuilder(mp3Buf, { name: "misfit-voicenote.mp3" });
+
+      await interaction.editReply({
+        content: `🎙️ Voice note ready (${voice}).`,
         files: [file],
       });
       return;
