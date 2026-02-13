@@ -54,6 +54,50 @@ export function registerInteractionCreateHandler({
     return await interaction.channel.messages.fetch(msgId);
   }
 
+  async function beautifyText(inputText, style = "box") {
+    const safeStyle = String(style || "box").toLowerCase();
+    const source = String(inputText || "").trim();
+    if (!source) return "";
+
+    const lines = source.split(/\r?\n/);
+
+    if (safeStyle === "code") {
+      return `\`\`\`\n${source}\n\`\`\``;
+    }
+
+    if (safeStyle === "spaced") {
+      return lines
+        .map((line) => line.split("").join(" "))
+        .join("\n");
+    }
+
+    if (safeStyle === "wave") {
+      let up = true;
+      const waveLines = lines.map((line) =>
+        line
+          .split("")
+          .map((ch) => {
+            if (!/[a-z]/i.test(ch)) return ch;
+            const out = up ? ch.toUpperCase() : ch.toLowerCase();
+            up = !up;
+            return out;
+          })
+          .join("")
+      );
+      return waveLines.join("\n");
+    }
+
+    if (safeStyle === "staircase") {
+      const words = source.split(/\s+/).filter(Boolean);
+      return words.map((w, i) => `${" ".repeat(i * 2)}${w}`).join("\n");
+    }
+
+    const maxLen = lines.reduce((m, l) => Math.max(m, l.length), 0);
+    const top = `+${"-".repeat(maxLen + 2)}+`;
+    const body = lines.map((line) => `| ${line.padEnd(maxLen, " ")} |`).join("\n");
+    return `${top}\n${body}\n${top}`;
+  }
+
   client.on("interactionCreate", async (interaction) => {
     try {
       if (interaction.isMessageContextMenuCommand()) {
@@ -144,6 +188,19 @@ export function registerInteractionCreateHandler({
             content: "🎙️ Voice note ready (alloy).",
             files: [file],
           });
+          return;
+        }
+
+        if (interaction.commandName === "Misfit: Beautify Text") {
+          const text = (targetMsg.content || "").trim();
+          if (!text) {
+            await interaction.editReply("No text found in that message 😌");
+            return;
+          }
+          const out = await beautifyText(text, "box");
+          await interaction.editReply(
+            `**Beautified:**\n${out || "I couldn’t beautify that text."}`.slice(0, 1900)
+          );
           return;
         }
 
@@ -906,6 +963,32 @@ export function registerInteractionCreateHandler({
           content: `🎙️ Voice note ready (${voice}).`,
           files: [file],
         });
+        return;
+      }
+
+      if (interaction.commandName === "beautify") {
+        const style = (interaction.options.getString("style") || "box").toLowerCase();
+        let sourceText = (interaction.options.getString("text") || "").trim();
+
+        if (!sourceText) {
+          const targetMsg = await resolveTargetMessageFromSlash(interaction, "message");
+          sourceText = (targetMsg?.content || "").trim();
+        }
+
+        if (!sourceText) {
+          await interaction.editReply(
+            "Provide `text`, or reply first and run `/beautify`, or pass a message link 😌"
+          );
+          return;
+        }
+
+        const out = await beautifyText(sourceText, style);
+        await interaction.editReply(
+          `**Beautified (${style}):**\n${out || "I couldn’t beautify that text."}`.slice(
+            0,
+            1900
+          )
+        );
         return;
       }
 

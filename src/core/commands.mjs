@@ -135,6 +135,38 @@ export function getCommands({ ApplicationCommandType }) {
       ],
     },
     {
+      name: "beautify",
+      description: "Beautify text (your input or a replied/linked message).",
+      options: [
+        {
+          name: "text",
+          description: "Text to beautify (optional if using message/reply context)",
+          type: 3,
+          required: false,
+        },
+        {
+          name: "message",
+          description:
+            "Discord message link (optional). If omitted, uses your recent reply context.",
+          type: 3,
+          required: false,
+        },
+        {
+          name: "style",
+          description: "Visual style (ASCII/look)",
+          type: 3,
+          required: false,
+          choices: [
+            { name: "box", value: "box" },
+            { name: "wave", value: "wave" },
+            { name: "spaced", value: "spaced" },
+            { name: "staircase", value: "staircase" },
+            { name: "code", value: "code" },
+          ],
+        },
+      ],
+    },
+    {
       name: "schedule",
       description: "Owner only: schedule messages (one-time or repeating).",
       options: [
@@ -533,6 +565,7 @@ export function getCommands({ ApplicationCommandType }) {
     { name: "Misfit: Analyze Image", type: ApplicationCommandType.Message },
     { name: "Misfit: Transcribe Voice", type: ApplicationCommandType.Message },
     { name: "Misfit: Voice Note", type: ApplicationCommandType.Message },
+    { name: "Misfit: Beautify Text", type: ApplicationCommandType.Message },
   ];
 }
 
@@ -572,12 +605,13 @@ export function getHelpText() {
     "• `/imagine prompt:<text>`",
     "• `/summarizechannel count:<1-100>`",
     "• `/voicenote text:<text> [voice]`",
+    "• `/beautify [text] [message:<link>] [style]`",
     "• Time format for `/schedule when:` use ISO UTC like `2026-02-14T21:30:00Z`",
     "• Purge note: Discord only bulk-deletes messages newer than 14 days",
     "• Auto-purge interval unit supports: seconds, minutes, hours, days",
     "",
     "**Right-click a message → Apps:**",
-    "• Misfit: Summarize / Explain / Analyze Image / Transcribe Voice / Voice Note",
+    "• Misfit: Summarize / Explain / Analyze Image / Transcribe Voice / Voice Note / Beautify Text",
   ].join("\n");
 }
 
