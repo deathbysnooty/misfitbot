@@ -194,7 +194,7 @@ export function getCommands({ ApplicationCommandType }) {
             {
               type: 3,
               name: "when",
-              description: "UTC time (ISO) or unix seconds",
+              description: "When to post: ISO/unix or relative like dd/hh/mm",
               required: true,
             },
             {
@@ -231,7 +231,7 @@ export function getCommands({ ApplicationCommandType }) {
             {
               type: 3,
               name: "when",
-              description: "UTC time (ISO) or unix seconds",
+              description: "When to post: ISO/unix or relative like dd/hh/mm",
               required: true,
             },
             {
@@ -616,7 +616,7 @@ export function getHelpText() {
     "• `/voicenote text:<text> [voice]`",
     "• `/beautify [text] [message:<link>] [style]`",
     "• Beautify styles: box, double_box, banner, wave, glitch, spaced, tinycaps, bubble, leet, shadow, matrix, staircase, framed_quote, divider, code",
-    "• Time format for `/schedule when:` use ISO UTC like `2026-02-14T21:30:00Z`",
+    "• `/schedule when:` ISO UTC (`2026-02-14T21:30:00Z`), unix, `dd/hh/mm` (`01/02/30`), `hh/mm`, or `1d2h30m`",
     "• Purge note: Discord only bulk-deletes messages newer than 14 days",
     "• Auto-purge interval unit supports: seconds, minutes, hours, days",
     "",

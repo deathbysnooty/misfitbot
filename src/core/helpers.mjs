@@ -155,11 +155,44 @@ export function parseMediaUrlsInput(raw) {
 export function parseScheduleTimeToUnixSeconds(input) {
   const raw = String(input || "").trim();
   if (!raw) return null;
+  const now = Math.floor(Date.now() / 1000);
 
   if (/^\d{10,13}$/.test(raw)) {
     const n = Number(raw);
     if (!Number.isFinite(n)) return null;
     return raw.length === 13 ? Math.floor(n / 1000) : n;
+  }
+
+  // Relative shorthand from now:
+  // - "dd/hh/mm" (e.g. "01/02/30" => 1 day, 2 hours, 30 minutes)
+  // - "hh/mm" (e.g. "02/45" => 2 hours, 45 minutes)
+  // - token form like "1d2h30m", "45m", "10s"
+  if (/^\d{1,3}\/\d{1,2}\/\d{1,2}$/.test(raw)) {
+    const [d, h, m] = raw.split("/").map((v) => Number(v));
+    if (![d, h, m].every(Number.isFinite)) return null;
+    const offset = d * 86400 + h * 3600 + m * 60;
+    return offset > 0 ? now + offset : null;
+  }
+  if (/^\d{1,3}\/\d{1,2}$/.test(raw)) {
+    const [h, m] = raw.split("/").map((v) => Number(v));
+    if (![h, m].every(Number.isFinite)) return null;
+    const offset = h * 3600 + m * 60;
+    return offset > 0 ? now + offset : null;
+  }
+  if (/^(\d+\s*[dhms]\s*)+$/i.test(raw)) {
+    const re = /(\d+)\s*([dhms])/gi;
+    let total = 0;
+    let match;
+    while ((match = re.exec(raw)) !== null) {
+      const n = Number(match[1]);
+      const u = match[2].toLowerCase();
+      if (!Number.isFinite(n)) return null;
+      if (u === "d") total += n * 86400;
+      if (u === "h") total += n * 3600;
+      if (u === "m") total += n * 60;
+      if (u === "s") total += n;
+    }
+    return total > 0 ? now + total : null;
   }
 
   if (/^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}$/.test(raw)) {

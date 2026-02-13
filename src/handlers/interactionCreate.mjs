@@ -564,7 +564,7 @@ export function registerInteractionCreateHandler({
           const sendAt = parseScheduleTimeToUnixSeconds(whenRaw);
           if (!sendAt) {
             await interaction.editReply(
-              "Invalid `when`. Use ISO UTC like `2026-02-14T21:30:00Z` or unix seconds."
+              "Invalid `when`. Use ISO UTC, unix, `dd/hh/mm` (like `01/02/30`), `hh/mm`, or token form like `1d2h30m`."
             );
             return;
           }
@@ -655,7 +655,7 @@ export function registerInteractionCreateHandler({
           const sendAt = parseScheduleTimeToUnixSeconds(whenRaw);
           if (!sendAt) {
             await interaction.editReply(
-              "Invalid `when`. Use ISO UTC like `2026-02-14T21:30:00Z` or unix seconds."
+              "Invalid `when`. Use ISO UTC, unix, `dd/hh/mm` (like `01/02/30`), `hh/mm`, or token form like `1d2h30m`."
             );
             return;
           }
