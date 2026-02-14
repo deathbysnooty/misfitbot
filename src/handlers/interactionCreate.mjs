@@ -125,29 +125,27 @@ export function registerInteractionCreateHandler({
     return text;
   }
 
-  function normalizeAnswerText(input) {
-    return String(input || "")
-      .toLowerCase()
-      .replace(/[^\p{L}\p{N}\s]/gu, " ")
-      .replace(/\s+/g, " ")
-      .trim();
-  }
-
-  function quizButtons(sessionId, disabled = false) {
-    return [
-      new ActionRowBuilder().addComponents(
+  function quizButtons(session, disabled = false) {
+    const optionButtons = new ActionRowBuilder();
+    for (let i = 0; i < 4; i += 1) {
+      optionButtons.addComponents(
         new ButtonBuilder()
-          .setCustomId(`quiz_answer:${sessionId}`)
-          .setLabel("Answer")
+          .setCustomId(`quiz_pick:${session.id}:${i}`)
+          .setLabel(`${String.fromCharCode(65 + i)}. ${session.options[i] || "..."}`.slice(0, 80))
           .setStyle(ButtonStyle.Primary)
-          .setDisabled(disabled),
-        new ButtonBuilder()
-          .setCustomId(`quiz_stop:${sessionId}`)
-          .setLabel("Stop")
-          .setStyle(ButtonStyle.Danger)
           .setDisabled(disabled)
-      ),
-    ];
+      );
+    }
+
+    const controls = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`quiz_stop:${session.id}`)
+        .setLabel("Stop")
+        .setStyle(ButtonStyle.Danger)
+        .setDisabled(disabled)
+    );
+
+    return [optionButtons, controls];
   }
 
   function buildQuizEmbed(session) {
@@ -156,7 +154,7 @@ export function registerInteractionCreateHandler({
       session.difficulty.charAt(0).toUpperCase() + session.difficulty.slice(1);
     return new EmbedBuilder()
       .setColor(EMBED_COLORS.info)
-      .setTitle(`${genreLabel} Quiz - ${difficultyLabel}`)
+      .setTitle(`${genreLabel} Quiz - ${difficultyLabel} - Q${session.questionNumber}`)
       .setDescription(session.question.slice(0, 4000))
       .addFields(
         { name: "Points", value: String(session.points), inline: true },
@@ -164,7 +162,7 @@ export function registerInteractionCreateHandler({
         { name: "Started By", value: `<@${session.startedBy}>`, inline: true }
       )
       .setFooter({
-        text: "Click Answer and submit a word, phrase, or sentence.",
+        text: "Pick one option. A new question appears after each selection.",
       });
   }
 
@@ -176,7 +174,7 @@ export function registerInteractionCreateHandler({
         {
           role: "system",
           content:
-            "Create one quiz question and return strict JSON only. Keys: question (string), canonical_answer (string), acceptable_answers (array of strings, max 8), explanation (string max 180 chars). No markdown.",
+            "Create one multiple-choice quiz question and return strict JSON only. Keys: question (string), options (array of 4 short strings), correct_index (0-3 integer), explanation (string max 180 chars). No markdown.",
         },
         {
           role: "user",
@@ -195,76 +193,34 @@ export function registerInteractionCreateHandler({
     }
 
     const question = String(parsed?.question || "").trim();
-    const canonical = String(parsed?.canonical_answer || "").trim();
-    const explanation = String(parsed?.explanation || "").trim().slice(0, 180);
-    const acceptable = Array.isArray(parsed?.acceptable_answers)
-      ? parsed.acceptable_answers
+    const options = Array.isArray(parsed?.options)
+      ? parsed.options
           .map((v) => String(v || "").trim())
           .filter(Boolean)
-          .slice(0, 8)
+          .slice(0, 4)
       : [];
+    const correctIndex = Number(parsed?.correct_index);
+    const explanation = String(parsed?.explanation || "").trim().slice(0, 180);
 
-    if (!question || !canonical) {
+    if (
+      !question ||
+      options.length !== 4 ||
+      !Number.isInteger(correctIndex) ||
+      correctIndex < 0 ||
+      correctIndex > 3
+    ) {
       throw new Error("Quiz generation failed.");
     }
 
+    const dedup = new Set(options.map((v) => v.toLowerCase()));
+    if (dedup.size !== 4) throw new Error("Quiz options must be unique.");
+
     return {
       question: question.slice(0, 1200),
-      canonicalAnswer: canonical.slice(0, 300),
-      acceptableAnswers: acceptable,
+      options: options.map((v) => v.slice(0, 90)),
+      correctIndex,
       explanation,
     };
-  }
-
-  async function evaluateQuizAnswer({
-    question,
-    canonicalAnswer,
-    acceptableAnswers,
-    userAnswer,
-  }) {
-    const normalizedUser = normalizeAnswerText(userAnswer);
-    const normalizedCanonical = normalizeAnswerText(canonicalAnswer);
-    const normalizedAcceptable = acceptableAnswers.map(normalizeAnswerText);
-
-    if (
-      normalizedUser &&
-      (normalizedUser === normalizedCanonical ||
-        normalizedAcceptable.includes(normalizedUser))
-    ) {
-      return { correct: true, reason: "Exact match." };
-    }
-
-    const resp = await openai.chat.completions.create({
-      model: "gpt-4.1-mini",
-      messages: [
-        {
-          role: "system",
-          content:
-            "Judge if USER_ANSWER is correct for the quiz. Be lenient with synonyms, abbreviations, equivalent phrasing, and minor spelling errors. Return strict JSON only: {\"correct\":true|false,\"reason\":\"short\"}.",
-        },
-        {
-          role: "user",
-          content: JSON.stringify({
-            question,
-            canonical_answer: canonicalAnswer,
-            acceptable_answers: acceptableAnswers,
-            user_answer: userAnswer,
-          }),
-        },
-      ],
-      temperature: 0,
-    });
-
-    const raw = resp.choices?.[0]?.message?.content || "";
-    try {
-      const parsed = JSON.parse(sanitizeModelJson(raw));
-      return {
-        correct: Boolean(parsed?.correct),
-        reason: String(parsed?.reason || "").trim().slice(0, 180),
-      };
-    } catch {
-      return { correct: false, reason: "Could not verify answer." };
-    }
   }
 
   function recordQuizAttempt({ guildId, userId, pointsAwarded }) {
@@ -283,42 +239,66 @@ export function registerInteractionCreateHandler({
     `).run(guildId, userId, points, correctDelta);
   }
 
+  async function updateQuizMessage(session, disabled = false) {
+    const targetChannel = await client.channels
+      .fetch(session.channelId)
+      .catch(() => null);
+    if (!targetChannel?.isTextBased() || !session.messageId) return null;
+    const quizMessage = await targetChannel.messages
+      .fetch(session.messageId)
+      .catch(() => null);
+    if (!quizMessage) return null;
+    await quizMessage
+      .edit({
+        embeds: [buildQuizEmbed(session)],
+        components: quizButtons(session, disabled),
+      })
+      .catch(() => {});
+    return targetChannel;
+  }
+
+  function armQuizTimeout(session) {
+    if (session.timeoutHandle) clearTimeout(session.timeoutHandle);
+    const ms = Math.max(1000, session.secondsPerQuestion * 1000);
+    session.timeoutHandle = setTimeout(() => {
+      closeQuizSession(session, { type: "timeout" }).catch(() => {});
+    }, ms);
+  }
+
+  async function nextQuizQuestion(session, introText = "") {
+    if (!session || session.closed) return;
+
+    const generated = await generateQuizQuestion({
+      genre: session.genre,
+      difficulty: session.difficulty,
+    });
+
+    session.question = generated.question;
+    session.options = generated.options;
+    session.correctIndex = generated.correctIndex;
+    session.explanation = generated.explanation;
+    session.questionNumber += 1;
+    session.resolving = false;
+    session.endsAt = Math.floor(Date.now() / 1000) + session.secondsPerQuestion;
+
+    const channel = await updateQuizMessage(session, false);
+    if (introText && channel) {
+      await channel.send(introText.slice(0, 1900)).catch(() => {});
+    }
+    armQuizTimeout(session);
+  }
+
   async function closeQuizSession(session, outcome) {
     if (!session || session.closed) return;
     session.closed = true;
     if (session.timeoutHandle) clearTimeout(session.timeoutHandle);
     activeQuizSessions.delete(session.channelId);
-
-    const targetChannel = await client.channels
-      .fetch(session.channelId)
-      .catch(() => null);
+    const targetChannel = await updateQuizMessage(session, true);
     if (!targetChannel?.isTextBased()) return;
-
-    if (session.messageId) {
-      const quizMessage = await targetChannel.messages
-        .fetch(session.messageId)
-        .catch(() => null);
-      if (quizMessage) {
-        await quizMessage
-          .edit({
-            embeds: [buildQuizEmbed(session)],
-            components: quizButtons(session.id, true),
-          })
-          .catch(() => {});
-      }
-    }
-
-    if (outcome.type === "correct") {
-      const extra = outcome.reason ? `\nReason: ${outcome.reason}` : "";
-      await targetChannel.send(
-        `✅ <@${outcome.userId}> got it right! +${session.points} point(s).\nAnswer: **${session.canonicalAnswer}**${extra}`
-      );
-      return;
-    }
 
     if (outcome.type === "timeout") {
       await targetChannel.send(
-        `⏰ Time is up. No correct answer.\nAnswer: **${session.canonicalAnswer}**`
+        `⏰ Time is up. Quiz ended.\nCorrect answer: **${session.options[session.correctIndex]}**`
       );
       return;
     }
@@ -656,7 +636,7 @@ export function registerInteractionCreateHandler({
     try {
       if (interaction.isButton()) {
         if (
-          interaction.customId.startsWith("quiz_answer:") ||
+          interaction.customId.startsWith("quiz_pick:") ||
           interaction.customId.startsWith("quiz_stop:")
         ) {
           if (!interaction.guildId) {
@@ -667,7 +647,7 @@ export function registerInteractionCreateHandler({
             return;
           }
 
-          const [action, sessionId] = interaction.customId.split(":");
+          const [action, sessionId, optionRaw] = interaction.customId.split(":");
           const session = activeQuizSessions.get(interaction.channelId);
           if (
             !session ||
@@ -701,27 +681,50 @@ export function registerInteractionCreateHandler({
             return;
           }
 
-          if (session.answeredUsers.has(interaction.user.id)) {
+          if (session.resolving) {
             await interaction.reply({
-              content: "You already answered this question.",
+              content: "Answer is being processed. Try the next question in a moment.",
               ephemeral: true,
             });
             return;
           }
 
-          const modal = new ModalBuilder()
-            .setCustomId(`quiz_modal:${session.id}`)
-            .setTitle("Submit Quiz Answer");
-          const input = new TextInputBuilder()
-            .setCustomId("answer")
-            .setLabel("Your answer (word / phrase / sentence)")
-            .setStyle(TextInputStyle.Paragraph)
-            .setRequired(true)
-            .setMaxLength(300)
-            .setPlaceholder("Type your answer...");
+          const pickedIndex = Number(optionRaw);
+          if (!Number.isInteger(pickedIndex) || pickedIndex < 0 || pickedIndex > 3) {
+            await interaction.reply({
+              content: "Invalid option.",
+              ephemeral: true,
+            });
+            return;
+          }
 
-          modal.addComponents(new ActionRowBuilder().addComponents(input));
-          await interaction.showModal(modal);
+          session.resolving = true;
+          const correct = pickedIndex === session.correctIndex;
+          recordQuizAttempt({
+            guildId: interaction.guildId,
+            userId: interaction.user.id,
+            pointsAwarded: correct ? session.points : 0,
+          });
+
+          await interaction.reply({
+            content: correct
+              ? `✅ <@${interaction.user.id}> correct! +${session.points} point(s).`
+              : `❌ <@${interaction.user.id}> chose **${
+                  session.options[pickedIndex]
+                }**. Correct was **${session.options[session.correctIndex]}**.`,
+            ephemeral: false,
+          });
+
+          try {
+            await nextQuizQuestion(
+              session,
+              `➡️ Next question is live. (${session.difficulty} = ${session.points} point${
+                session.points === 1 ? "" : "s"
+              })`
+            );
+          } catch {
+            await closeQuizSession(session, { type: "stopped", userId: interaction.user.id });
+          }
           return;
         }
 
@@ -935,96 +938,6 @@ export function registerInteractionCreateHandler({
 
       if (interaction.isModalSubmit()) {
         const cid = interaction.customId;
-
-        if (cid.startsWith("quiz_modal:")) {
-          const sessionId = cid.slice("quiz_modal:".length);
-          const session = activeQuizSessions.get(interaction.channelId);
-          if (
-            !interaction.guildId ||
-            !session ||
-            session.id !== sessionId ||
-            session.closed ||
-            Math.floor(Date.now() / 1000) >= session.endsAt
-          ) {
-            await interaction.reply({
-              content: "That quiz session has ended.",
-              ephemeral: true,
-            });
-            return;
-          }
-
-          if (session.answeredUsers.has(interaction.user.id)) {
-            await interaction.reply({
-              content: "You already answered this question.",
-              ephemeral: true,
-            });
-            return;
-          }
-
-          if (session.resolving) {
-            await interaction.reply({
-              content: "Another answer is being checked. Try again in a moment.",
-              ephemeral: true,
-            });
-            return;
-          }
-
-          const userAnswer = interaction.fields
-            .getTextInputValue("answer")
-            .trim()
-            .slice(0, 300);
-          if (!userAnswer) {
-            await interaction.reply({
-              content: "Answer cannot be empty.",
-              ephemeral: true,
-            });
-            return;
-          }
-
-          session.answeredUsers.add(interaction.user.id);
-          session.resolving = true;
-          await interaction.deferReply({ ephemeral: true });
-
-          try {
-            const verdict = await evaluateQuizAnswer({
-              question: session.question,
-              canonicalAnswer: session.canonicalAnswer,
-              acceptableAnswers: session.acceptableAnswers,
-              userAnswer,
-            });
-
-            if (verdict.correct) {
-              recordQuizAttempt({
-                guildId: interaction.guildId,
-                userId: interaction.user.id,
-                pointsAwarded: session.points,
-              });
-
-              await interaction.editReply(
-                `✅ Correct! You earned ${session.points} point(s).`
-              );
-
-              await closeQuizSession(session, {
-                type: "correct",
-                userId: interaction.user.id,
-                reason: verdict.reason,
-              });
-              return;
-            }
-
-            recordQuizAttempt({
-              guildId: interaction.guildId,
-              userId: interaction.user.id,
-              pointsAwarded: 0,
-            });
-            await interaction.editReply(
-              `❌ Not quite.${verdict.reason ? ` ${verdict.reason}` : ""}`
-            );
-            return;
-          } finally {
-            if (!session.closed) session.resolving = false;
-          }
-        }
 
         if (cid.startsWith("schedule_embed:")) {
           const token = cid.slice("schedule_embed:".length);
@@ -1684,13 +1597,14 @@ export function registerInteractionCreateHandler({
             startedBy: interaction.user.id,
             genre,
             difficulty,
+            secondsPerQuestion: seconds,
             points,
             question: generated.question,
-            canonicalAnswer: generated.canonicalAnswer,
-            acceptableAnswers: generated.acceptableAnswers,
+            options: generated.options,
+            correctIndex: generated.correctIndex,
             explanation: generated.explanation,
             endsAt,
-            answeredUsers: new Set(),
+            questionNumber: 1,
             resolving: false,
             closed: false,
             timeoutHandle: null,
@@ -1700,15 +1614,13 @@ export function registerInteractionCreateHandler({
 
           await interaction.editReply({
             embeds: [buildQuizEmbed(session)],
-            components: quizButtons(session.id),
+            components: quizButtons(session),
           });
 
           const sent = await interaction.fetchReply().catch(() => null);
           session.messageId = sent?.id || "";
 
-          session.timeoutHandle = setTimeout(() => {
-            closeQuizSession(session, { type: "timeout" }).catch(() => {});
-          }, seconds * 1000);
+          armQuizTimeout(session);
           return;
         }
 

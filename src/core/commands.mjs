@@ -178,12 +178,12 @@ export function getCommands({ ApplicationCommandType }) {
     },
     {
       name: "quiz",
-      description: "Start a timed quiz, answer with AI checking, and view leaderboard.",
+      description: "Start a timed multiple-choice quiz and view leaderboard.",
       options: [
         {
           type: 1,
           name: "start",
-          description: "Start a public timed quiz in this channel.",
+          description: "Start a public timed 4-option quiz in this channel.",
           options: [
             {
               type: 3,
