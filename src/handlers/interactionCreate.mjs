@@ -157,6 +157,11 @@ export function registerInteractionCreateHandler({
       .setTitle(`${genreLabel} Quiz - ${difficultyLabel} - Q${session.questionNumber}`)
       .setDescription(session.question.slice(0, 4000))
       .addFields(
+        {
+          name: "Progress",
+          value: `${session.questionNumber}/${session.totalQuestions}`,
+          inline: true,
+        },
         { name: "Points", value: String(session.points), inline: true },
         { name: "Timer", value: `<t:${session.endsAt}:R>`, inline: true },
         { name: "Started By", value: `<@${session.startedBy}>`, inline: true }
@@ -223,6 +228,33 @@ export function registerInteractionCreateHandler({
     };
   }
 
+  function normalizeQuestionKey(input) {
+    return String(input || "")
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}\s]/gu, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  async function generateUniqueQuizQuestion({
+    genre,
+    difficulty,
+    recentQuestionKeys = [],
+    maxTries = 5,
+  }) {
+    const seen = new Set(recentQuestionKeys.filter(Boolean));
+    let fallback = null;
+
+    for (let i = 0; i < maxTries; i += 1) {
+      const q = await generateQuizQuestion({ genre, difficulty });
+      const key = normalizeQuestionKey(q.question);
+      if (!fallback) fallback = q;
+      if (!seen.has(key)) return q;
+    }
+
+    return fallback || (await generateQuizQuestion({ genre, difficulty }));
+  }
+
   function recordQuizAttempt({ guildId, userId, pointsAwarded }) {
     const points = Math.max(0, Number(pointsAwarded) || 0);
     const correctDelta = points > 0 ? 1 : 0;
@@ -257,21 +289,68 @@ export function registerInteractionCreateHandler({
     return targetChannel;
   }
 
+  async function handleQuizQuestionTimeout(session) {
+    if (!session || session.closed) return;
+
+    if (session.resolving) {
+      armQuizTimeout(session);
+      return;
+    }
+
+    const targetChannel = await client.channels
+      .fetch(session.channelId)
+      .catch(() => null);
+    if (!targetChannel?.isTextBased()) {
+      await closeQuizSession(session, { type: "stopped", userId: session.startedBy });
+      return;
+    }
+
+    await targetChannel.send(
+      `⏰ Q${session.questionNumber} timed out.\nCorrect answer: **${session.options[session.correctIndex]}**`
+    );
+
+    if (session.questionNumber >= session.totalQuestions) {
+      await closeQuizSession(session, { type: "completed" });
+      return;
+    }
+
+    try {
+      await nextQuizQuestion(
+        session,
+        `➡️ Next question is live. (${session.difficulty} = ${session.points} point${
+          session.points === 1 ? "" : "s"
+        })`
+      );
+    } catch {
+      await closeQuizSession(session, { type: "stopped", userId: session.startedBy });
+    }
+  }
+
   function armQuizTimeout(session) {
     if (session.timeoutHandle) clearTimeout(session.timeoutHandle);
     const ms = Math.max(1000, session.secondsPerQuestion * 1000);
     session.timeoutHandle = setTimeout(() => {
-      closeQuizSession(session, { type: "timeout" }).catch(() => {});
+      handleQuizQuestionTimeout(session).catch(() => {
+        closeQuizSession(session, { type: "stopped", userId: session.startedBy }).catch(
+          () => {}
+        );
+      });
     }, ms);
   }
 
   async function nextQuizQuestion(session, introText = "") {
     if (!session || session.closed) return;
 
-    const generated = await generateQuizQuestion({
+    const generated = await generateUniqueQuizQuestion({
       genre: session.genre,
       difficulty: session.difficulty,
+      recentQuestionKeys: session.recentQuestionKeys,
     });
+    const key = normalizeQuestionKey(generated.question);
+    session.recentQuestionKeys.push(key);
+    if (session.recentQuestionKeys.length > 25) {
+      session.recentQuestionKeys = session.recentQuestionKeys.slice(-25);
+    }
 
     session.question = generated.question;
     session.options = generated.options;
@@ -296,14 +375,14 @@ export function registerInteractionCreateHandler({
     const targetChannel = await updateQuizMessage(session, true);
     if (!targetChannel?.isTextBased()) return;
 
-    if (outcome.type === "timeout") {
+    if (outcome.type === "completed") {
       await targetChannel.send(
-        `⏰ Time is up. Quiz ended.\nCorrect answer: **${session.options[session.correctIndex]}**`
+        `🏁 Quiz session complete! ${session.totalQuestions} questions finished.`
       );
       return;
     }
 
-    await targetChannel.send(`🛑 Quiz stopped by <@${outcome.userId}>.`);
+    await targetChannel.send(`🛑 Quiz stopped by <@${outcome.userId || session.startedBy}>.`);
   }
 
   function computeMbtiType(scores) {
@@ -714,6 +793,11 @@ export function registerInteractionCreateHandler({
                 }**. Correct was **${session.options[session.correctIndex]}**.`,
             ephemeral: false,
           });
+
+          if (session.questionNumber >= session.totalQuestions) {
+            await closeQuizSession(session, { type: "completed" });
+            return;
+          }
 
           try {
             await nextQuizQuestion(
@@ -1583,11 +1667,16 @@ export function registerInteractionCreateHandler({
           if (seconds > 180) seconds = 180;
 
           const points = QUIZ_POINTS_BY_DIFFICULTY[difficulty] || 1;
-          const generated = await generateQuizQuestion({ genre, difficulty });
+          const generated = await generateUniqueQuizQuestion({
+            genre,
+            difficulty,
+            recentQuestionKeys: [],
+          });
           const endsAt = Math.floor(Date.now() / 1000) + seconds;
           const sessionId = `${Date.now().toString(36)}${Math.random()
             .toString(36)
             .slice(2, 7)}`;
+          const firstQuestionKey = normalizeQuestionKey(generated.question);
 
           const session = {
             id: sessionId,
@@ -1603,8 +1692,10 @@ export function registerInteractionCreateHandler({
             options: generated.options,
             correctIndex: generated.correctIndex,
             explanation: generated.explanation,
+            recentQuestionKeys: [firstQuestionKey],
             endsAt,
             questionNumber: 1,
+            totalQuestions: 10,
             resolving: false,
             closed: false,
             timeoutHandle: null,
