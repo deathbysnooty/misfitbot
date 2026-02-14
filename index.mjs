@@ -41,6 +41,7 @@ import {
 } from "./src/core/commands.mjs";
 import { createAiService } from "./src/services/ai.mjs";
 import { createSchedulerService } from "./src/services/scheduler.mjs";
+import { createTriviaService } from "./src/services/trivia.mjs";
 import { registerGuildMemberAddHandler } from "./src/handlers/guildMemberAdd.mjs";
 import { registerMessageCreateHandler } from "./src/handlers/messageCreate.mjs";
 import { registerInteractionCreateHandler } from "./src/handlers/interactionCreate.mjs";
@@ -101,6 +102,7 @@ const scheduler = createSchedulerService({
   clampPurgeScanLimit,
   schedulerPollMs: SCHEDULER_POLL_MS,
 });
+const trivia = createTriviaService();
 
 const commands = getCommands({ ApplicationCommandType });
 const helpText = getHelpText();
@@ -134,6 +136,7 @@ registerMessageCreateHandler({
 registerInteractionCreateHandler({
   client,
   openai,
+  trivia,
   db,
   OWNER_ID,
   WELCOME_CHANNEL_ID,

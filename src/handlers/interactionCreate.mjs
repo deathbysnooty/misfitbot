@@ -13,6 +13,7 @@ import { MBTI_QUESTIONS, MBTI_TYPE_SUMMARIES, MBTI_AXIS_INFO } from "../core/mbt
 export function registerInteractionCreateHandler({
   client,
   openai,
+  trivia,
   db,
   OWNER_ID,
   WELCOME_CHANNEL_ID,
@@ -203,34 +204,43 @@ export function registerInteractionCreateHandler({
     createdBy,
   }) {
     const questionKey = normalizeQuestionKey(question);
-    const result = db
-      .prepare(
-        `INSERT OR IGNORE INTO quiz_questions
-         (genre, difficulty, question, question_key, options_json, correct_index, explanation, created_by, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, strftime('%s','now'))`
-      )
-      .run(
-        genre,
-        difficulty,
-        question.slice(0, 1200),
-        questionKey,
-        JSON.stringify(options),
-        correctIndex,
-        String(explanation || "").slice(0, 180),
-        createdBy || ""
-      );
-    return { inserted: result.changes > 0, questionKey };
+    try {
+      const result = db
+        .prepare(
+          `INSERT OR IGNORE INTO quiz_questions
+           (genre, difficulty, question, question_key, options_json, correct_index, explanation, created_by, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, strftime('%s','now'))`
+        )
+        .run(
+          genre,
+          difficulty,
+          question.slice(0, 1200),
+          questionKey,
+          JSON.stringify(options),
+          correctIndex,
+          String(explanation || "").slice(0, 180),
+          createdBy || ""
+        );
+      return { inserted: result.changes > 0, questionKey };
+    } catch {
+      return { inserted: false, questionKey };
+    }
   }
 
   function getStoredQuizQuestion(session) {
-    const rows = db
-      .prepare(
-        `SELECT id, genre, question, question_key, options_json, correct_index, explanation
-         FROM quiz_questions
-         ORDER BY RANDOM()
-         LIMIT 200`
-      )
-      .all();
+    let rows = [];
+    try {
+      rows = db
+        .prepare(
+          `SELECT id, genre, question, question_key, options_json, correct_index, explanation
+           FROM quiz_questions
+           ORDER BY RANDOM()
+           LIMIT 200`
+        )
+        .all();
+    } catch {
+      return null;
+    }
 
     for (const row of rows) {
       const id = Number(row.id);
@@ -274,6 +284,32 @@ export function registerInteractionCreateHandler({
   }
 
   async function getNextQuizPayload(session) {
+    const online = await trivia?.getQuestion?.({
+      avoidQuestionKeys: Array.from(session.askedQuestionKeys),
+    });
+    if (online?.question && online?.answer) {
+      const key = normalizeQuestionKey(online.question);
+      if (!session.askedQuestionKeys.has(key)) {
+        insertQuizQuestion({
+          genre: "mixed",
+          difficulty: "mixed",
+          question: online.question,
+          options: [online.answer, ...(online.aliases || [])],
+          correctIndex: 0,
+          explanation: online.explanation || "",
+          createdBy: "opentdb",
+        });
+        return {
+          id: null,
+          question: online.question,
+          questionKey: key,
+          options: [online.answer, ...(online.aliases || [])],
+          correctIndex: 0,
+          explanation: online.explanation || "",
+        };
+      }
+    }
+
     const stored = getStoredQuizQuestion(session);
     if (stored) return stored;
 
