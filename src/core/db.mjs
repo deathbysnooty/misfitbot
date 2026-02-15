@@ -68,6 +68,25 @@ export function createDb({ dbPath, defaultBotMode }) {
   `);
 
   db.exec(`
+    CREATE TABLE IF NOT EXISTS message_presets (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      guild_id TEXT NOT NULL,
+      title TEXT NOT NULL,
+      title_key TEXT NOT NULL,
+      content TEXT NOT NULL DEFAULT '',
+      created_by TEXT NOT NULL DEFAULT '',
+      created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+      updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+      UNIQUE(guild_id, title_key)
+    );
+  `);
+
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_message_presets_lookup
+    ON message_presets (guild_id, title_key);
+  `);
+
+  db.exec(`
     CREATE TABLE IF NOT EXISTS auto_purge_rules (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       guild_id TEXT NOT NULL,

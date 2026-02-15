@@ -108,6 +108,17 @@ export function registerInteractionCreateHandler({
     return parseInt(hex, 16);
   }
 
+  function normalizePresetTitle(input) {
+    return String(input || "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 80);
+  }
+
+  function presetTitleKey(input) {
+    return normalizePresetTitle(input).toLowerCase();
+  }
+
   const MBTI_ANSWER_VALUES = {
     sd: -2,
     d: -1,
@@ -1037,6 +1048,54 @@ export function registerInteractionCreateHandler({
 
   client.on("interactionCreate", async (interaction) => {
     try {
+      if (interaction.isAutocomplete()) {
+        if (interaction.commandName !== "preset") return;
+        if (!interaction.guildId) {
+          await interaction.respond([]);
+          return;
+        }
+
+        const sub = interaction.options.getSubcommand(false);
+        if (sub !== "send" && sub !== "remove") {
+          await interaction.respond([]);
+          return;
+        }
+
+        const focused = interaction.options.getFocused(true);
+        if (focused.name !== "title") {
+          await interaction.respond([]);
+          return;
+        }
+
+        const keyPart = presetTitleKey(focused.value);
+        const rows = keyPart
+          ? db
+              .prepare(
+                `SELECT title
+                 FROM message_presets
+                 WHERE guild_id = ? AND title_key LIKE ?
+                 ORDER BY updated_at DESC
+                 LIMIT 25`
+              )
+              .all(interaction.guildId, `%${keyPart}%`)
+          : db
+              .prepare(
+                `SELECT title
+                 FROM message_presets
+                 WHERE guild_id = ?
+                 ORDER BY updated_at DESC
+                 LIMIT 25`
+              )
+              .all(interaction.guildId);
+
+        const choices = rows.map((r) => {
+          const title = String(r.title || "").slice(0, 100);
+          return { name: title, value: title };
+        });
+        await interaction.respond(choices);
+        return;
+      }
+
       if (interaction.isButton()) {
         if (
           !interaction.customId.startsWith("mbti_ans:") &&
@@ -3309,6 +3368,221 @@ export function registerInteractionCreateHandler({
                   result.changes > 0 ? "Auto-Purge Rule Removed" : "Rule Not Found",
                 description:
                   result.changes > 0 ? `#${id}` : `No rule #${id} found.`,
+                tone: result.changes > 0 ? "success" : "warn",
+              }),
+            ],
+          });
+          return;
+        }
+
+        await interaction.editReply("That subcommand isn’t wired up 😌");
+        return;
+      }
+
+      if (interaction.commandName === "preset") {
+        if (!interaction.guildId) {
+          await interaction.reply({
+            embeds: [
+              statusEmbed({
+                title: "Preset Messages",
+                description: "This command only works in a server.",
+                tone: "warn",
+              }),
+            ],
+            ephemeral: true,
+          });
+          return;
+        }
+
+        const isAdmin = Boolean(interaction.memberPermissions?.has("Administrator"));
+        if (!isAdmin) {
+          await interaction.reply({
+            embeds: [
+              statusEmbed({
+                title: "Permission Denied",
+                description: "Only admins can manage preset messages.",
+                tone: "error",
+              }),
+            ],
+            ephemeral: true,
+          });
+          return;
+        }
+
+        await safeDefer(interaction, { ephemeral: true });
+        const sub = interaction.options.getSubcommand();
+
+        if (sub === "add") {
+          const titleRaw = interaction.options.getString("title", true);
+          const content = interaction.options
+            .getString("message", true)
+            .trim()
+            .slice(0, 1800);
+          const title = normalizePresetTitle(titleRaw);
+          const key = presetTitleKey(titleRaw);
+
+          if (!title || !key) {
+            await interaction.editReply({
+              embeds: [
+                statusEmbed({
+                  title: "Invalid Title",
+                  description: "Title cannot be empty.",
+                  tone: "warn",
+                }),
+              ],
+            });
+            return;
+          }
+          if (!content) {
+            await interaction.editReply({
+              embeds: [
+                statusEmbed({
+                  title: "Invalid Message",
+                  description: "Preset message cannot be empty.",
+                  tone: "warn",
+                }),
+              ],
+            });
+            return;
+          }
+
+          const existing = db
+            .prepare(
+              `SELECT id
+               FROM message_presets
+               WHERE guild_id = ? AND title_key = ?`
+            )
+            .get(interaction.guildId, key);
+
+          db.prepare(
+            `INSERT INTO message_presets (
+               guild_id, title, title_key, content, created_by, created_at, updated_at
+             )
+             VALUES (?, ?, ?, ?, ?, strftime('%s','now'), strftime('%s','now'))
+             ON CONFLICT(guild_id, title_key) DO UPDATE SET
+               title = excluded.title,
+               content = excluded.content,
+               updated_at = strftime('%s','now')`
+          ).run(interaction.guildId, title, key, content, interaction.user.id);
+
+          await interaction.editReply({
+            embeds: [
+              statusEmbed({
+                title: existing ? "Preset Updated" : "Preset Added",
+                description: `**${title}** is ready to use with \`/preset send\`.`,
+                tone: "success",
+              }),
+            ],
+          });
+          return;
+        }
+
+        if (sub === "send") {
+          const titleRaw = interaction.options.getString("title", true);
+          const key = presetTitleKey(titleRaw);
+          const preset = db
+            .prepare(
+              `SELECT title, content
+               FROM message_presets
+               WHERE guild_id = ? AND title_key = ?`
+            )
+            .get(interaction.guildId, key);
+
+          if (!preset) {
+            await interaction.editReply({
+              embeds: [
+                statusEmbed({
+                  title: "Preset Not Found",
+                  description: `No preset found for \`${normalizePresetTitle(titleRaw)}\`.`,
+                  tone: "warn",
+                }),
+              ],
+            });
+            return;
+          }
+
+          const channel = interaction.options.getChannel("channel") || interaction.channel;
+          if (!channel?.isTextBased() || typeof channel.send !== "function") {
+            await interaction.editReply({
+              embeds: [
+                statusEmbed({
+                  title: "Invalid Channel",
+                  description: "Pick a text channel.",
+                  tone: "warn",
+                }),
+              ],
+            });
+            return;
+          }
+
+          await channel.send({ content: String(preset.content || "").slice(0, 1800) });
+          await interaction.editReply({
+            embeds: [
+              statusEmbed({
+                title: "Preset Sent",
+                description: `Sent **${preset.title}** in <#${channel.id}>.`,
+                tone: "success",
+              }),
+            ],
+          });
+          return;
+        }
+
+        if (sub === "list") {
+          const rows = db
+            .prepare(
+              `SELECT title
+               FROM message_presets
+               WHERE guild_id = ?
+               ORDER BY updated_at DESC
+               LIMIT 50`
+            )
+            .all(interaction.guildId);
+
+          if (rows.length === 0) {
+            await interaction.editReply({
+              embeds: [
+                statusEmbed({
+                  title: "Preset Messages",
+                  description: "No presets saved yet. Use `/preset add`.",
+                  tone: "info",
+                }),
+              ],
+            });
+            return;
+          }
+
+          const lines = rows.map((r, i) => `${i + 1}. ${String(r.title || "")}`);
+          await interaction.editReply({
+            embeds: [
+              statusEmbed({
+                title: `Preset Messages (${rows.length})`,
+                description: lines.join("\n").slice(0, 3900),
+                tone: "info",
+              }),
+            ],
+          });
+          return;
+        }
+
+        if (sub === "remove") {
+          const titleRaw = interaction.options.getString("title", true);
+          const key = presetTitleKey(titleRaw);
+          const result = db
+            .prepare(
+              `DELETE FROM message_presets
+               WHERE guild_id = ? AND title_key = ?`
+            )
+            .run(interaction.guildId, key);
+
+          await interaction.editReply({
+            embeds: [
+              statusEmbed({
+                title: result.changes > 0 ? "Preset Removed" : "Preset Not Found",
+                description:
+                  result.changes > 0
+                    ? `Removed \`${normalizePresetTitle(titleRaw)}\`.`
+                    : `No preset found for \`${normalizePresetTitle(titleRaw)}\`.`,
                 tone: result.changes > 0 ? "success" : "warn",
               }),
             ],

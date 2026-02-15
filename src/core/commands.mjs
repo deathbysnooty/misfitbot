@@ -396,6 +396,70 @@ export function getCommands({ ApplicationCommandType }) {
       ],
     },
     {
+      name: "preset",
+      description: "Admin only: save and send preset messages by title.",
+      options: [
+        {
+          type: 1,
+          name: "add",
+          description: "Create or update a preset message title.",
+          options: [
+            {
+              type: 3,
+              name: "title",
+              description: "Preset title",
+              required: true,
+            },
+            {
+              type: 3,
+              name: "message",
+              description: "Preset message content",
+              required: true,
+            },
+          ],
+        },
+        {
+          type: 1,
+          name: "send",
+          description: "Send a preset message by title.",
+          options: [
+            {
+              type: 3,
+              name: "title",
+              description: "Preset title",
+              required: true,
+              autocomplete: true,
+            },
+            {
+              type: 7,
+              name: "channel",
+              description: "Target channel (default: current channel)",
+              required: false,
+            },
+          ],
+        },
+        {
+          type: 1,
+          name: "list",
+          description: "List saved preset titles for this server.",
+        },
+        {
+          type: 1,
+          name: "remove",
+          description: "Delete a preset title.",
+          options: [
+            {
+              type: 3,
+              name: "title",
+              description: "Preset title",
+              required: true,
+              autocomplete: true,
+            },
+          ],
+        },
+      ],
+    },
+    {
       name: "purge",
       description: "Owner only: purge messages and configure auto-purge.",
       options: [
@@ -688,6 +752,7 @@ export function getHelpText() {
     "• `/welcome show` / `/welcome preview` / `/welcome clear` (owner)",
     "• `/mode set name:<sassy|chill|serious|hype|rude|ultraroast>` / `/mode show` (owner)",
     "• `/schedule addtext|addembed(form)|addfrom|list|remove|pause|resume` (owner)",
+    "• `/preset add|send|list|remove` (admin only)",
     "• `/purge media|nonadmin|all` and `/purge autopurge_set|autopurge_list|autopurge_remove` (owner)",
     "",
     "**Profiles (opt-in):**",
