@@ -522,6 +522,14 @@ export function registerInteractionCreateHandler({
     return false;
   }
 
+  async function reactQuizAnswer(message, emoji) {
+    try {
+      await message.react(emoji);
+    } catch {
+      // Ignore missing reaction permissions.
+    }
+  }
+
   async function fetchQuizChannel(session) {
     const ch = await client.channels.fetch(session.channelId).catch(() => null);
     if (!ch?.isTextBased()) return null;
@@ -677,6 +685,7 @@ export function registerInteractionCreateHandler({
         message.author.id !== session.prevSolvedFirstUserId &&
         !session.prevSolvedAckUsers.has(message.author.id)
       ) {
+        await reactQuizAnswer(message, "✅");
         session.prevSolvedAckUsers.add(message.author.id);
         await message.channel.send(
           `✅ <@${message.author.id}> also correct (no points, first answer already scored).`
@@ -685,10 +694,12 @@ export function registerInteractionCreateHandler({
       }
 
       if (!isGuessCloseEnough(guess, session.currentAliasKeys || [session.currentAnswerKey])) {
+        await reactQuizAnswer(message, "❌");
         return;
       }
 
       if (!session.roundSolved) {
+        await reactQuizAnswer(message, "✅");
         session.roundSolved = true;
         session.firstCorrectUserId = message.author.id;
         session.prevSolvedAnswerKey = session.currentAnswerKey;
@@ -713,6 +724,7 @@ export function registerInteractionCreateHandler({
         message.author.id !== session.firstCorrectUserId &&
         !session.correctNoPointUsers.has(message.author.id)
       ) {
+        await reactQuizAnswer(message, "✅");
         session.correctNoPointUsers.add(message.author.id);
         await message.channel.send(
           `✅ <@${message.author.id}> also correct (no points, first answer already scored).`

@@ -275,11 +275,15 @@ export function createSchedulerService({
 
           const content = String(row.message || "").trim().slice(0, 1800);
           if (!content) throw new Error("Reminder message empty.");
+          const guild =
+            client.guilds.cache.get(row.guild_id) ||
+            (await client.guilds.fetch(row.guild_id).catch(() => null));
+          const guildLabel = guild?.name || `Unknown Server (${row.guild_id})`;
 
           await user.send(
             [
               "⏰ Reminder",
-              `Server: ${row.guild_id}`,
+              `Server: ${guildLabel}`,
               `Message: ${content}`,
               `Scheduled for: <t:${Number(row.send_at)}:F>`,
             ].join("\n")
