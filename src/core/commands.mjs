@@ -579,6 +579,43 @@ export function getCommands({ ApplicationCommandType }) {
       ],
     },
     {
+      name: "nsfwguard",
+      description: "Admin only: auto-delete adult/NSFW images in selected channels.",
+      options: [
+        {
+          type: 1,
+          name: "set",
+          description: "Enable adult/NSFW image auto-delete in a channel.",
+          options: [
+            {
+              type: 7,
+              name: "channel",
+              description: "Channel to guard",
+              required: true,
+            },
+          ],
+        },
+        {
+          type: 1,
+          name: "list",
+          description: "List guarded channels for this server.",
+        },
+        {
+          type: 1,
+          name: "remove",
+          description: "Disable media auto-delete for a channel.",
+          options: [
+            {
+              type: 7,
+              name: "channel",
+              description: "Guarded channel to remove",
+              required: true,
+            },
+          ],
+        },
+      ],
+    },
+    {
       name: "purge",
       description: "Owner only: purge messages and configure auto-purge.",
       options: [
@@ -872,6 +909,7 @@ export function getHelpText() {
     "• `/mode set name:<sassy|chill|serious|hype|rude|ultraroast>` / `/mode show` (owner)",
     "• `/schedule addtext|addembed(form)|addfrom|list|remove|pause|resume` (owner)",
     "• `/preset add|send|list|remove` (admin only)",
+    "• `/nsfwguard set|list|remove` (admin only, deletes adult/NSFW images only)",
     "• `/purge media|nonadmin|all` and `/purge autopurge_set|autopurge_list|autopurge_remove` (owner)",
     "",
     "**Personal reminders (all users):**",

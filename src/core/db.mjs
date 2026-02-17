@@ -116,6 +116,23 @@ export function createDb({ dbPath, defaultBotMode }) {
   `);
 
   db.exec(`
+    CREATE TABLE IF NOT EXISTS nsfw_media_guard_rules (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      guild_id TEXT NOT NULL,
+      channel_id TEXT NOT NULL UNIQUE,
+      active INTEGER NOT NULL DEFAULT 1,
+      created_by TEXT NOT NULL DEFAULT '',
+      created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+      updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+    );
+  `);
+
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_nsfw_media_guard_rules_lookup
+    ON nsfw_media_guard_rules (guild_id, channel_id, active);
+  `);
+
+  db.exec(`
     CREATE TABLE IF NOT EXISTS auto_purge_rules (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       guild_id TEXT NOT NULL,
@@ -219,6 +236,11 @@ export function createDb({ dbPath, defaultBotMode }) {
     "mbti_sessions",
     "answers_json",
     "answers_json TEXT NOT NULL DEFAULT '[]'"
+  );
+  ensureColumn(
+    "nsfw_media_guard_rules",
+    "mode",
+    "mode TEXT NOT NULL DEFAULT 'adult_only'"
   );
 
   db.exec(`

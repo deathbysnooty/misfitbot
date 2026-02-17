@@ -111,6 +111,56 @@ export function createAiService({
     return `Current time in **UTC**: **${utc}**. If you want another location, ask like: \`what time is it in Singapore?\``;
   }
 
+  function parseModelJson(raw) {
+    const text = String(raw || "").trim();
+    if (!text) return null;
+    const clean = text.startsWith("```")
+      ? text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "")
+      : text;
+    try {
+      return JSON.parse(clean);
+    } catch {
+      return null;
+    }
+  }
+
+  async function isLikelyAdultImage(imageUrl) {
+    if (!imageUrl) return false;
+    try {
+      const resp = await openai.chat.completions.create({
+        model: "gpt-4.1-mini",
+        temperature: 0,
+        messages: [
+          {
+            role: "system",
+            content:
+              "You are a strict image safety classifier. Return JSON only with keys: adult (boolean), confidence (number 0..1), reason (short string). Mark adult=true for explicit nudity, pornographic sexual acts, or fetish-focused explicit sexual imagery. Otherwise adult=false.",
+          },
+          {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: "Classify this image for adult NSFW content.",
+              },
+              {
+                type: "image_url",
+                image_url: { url: imageUrl },
+              },
+            ],
+          },
+        ],
+      });
+
+      const parsed = parseModelJson(resp.choices?.[0]?.message?.content || "");
+      const adult = Boolean(parsed?.adult);
+      const confidence = Number(parsed?.confidence || 0);
+      return adult && confidence >= 0.55;
+    } catch {
+      return false;
+    }
+  }
+
   async function makeChatReply({ userId, userText, referencedText, imageUrls }) {
     const directTimeReply = getLiveTimeReply(userText);
     if (directTimeReply && !referencedText && (!imageUrls || imageUrls.length === 0)) {
@@ -261,6 +311,7 @@ Time rules:
 
   return {
     makeChatReply,
+    isLikelyAdultImage,
     transcribeAudioAttachment,
     generateImageFromPrompt,
     generateVoiceFromText,

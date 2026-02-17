@@ -14,6 +14,30 @@ export function registerMessageCreateHandler({
   parseIntervalToSeconds,
   formatIntervalLabel,
 }) {
+  function extractImageUrlsForGuard(msg) {
+    const urls = [];
+
+    if (msg?.attachments?.size) {
+      for (const [, att] of msg.attachments) {
+        const ct = String(att?.contentType || "").toLowerCase();
+        const name = String(att?.name || "").toLowerCase();
+        const isImage =
+          ct.startsWith("image/") ||
+          /\.(png|jpe?g|gif|webp|bmp)$/i.test(name);
+        if (isImage && att?.url) urls.push(att.url);
+      }
+    }
+
+    const s = String(msg?.content || "");
+    const re = /https?:\/\/\S+\.(?:png|jpe?g|gif|webp|bmp)(?:\?\S*)?/gi;
+    let m;
+    while ((m = re.exec(s)) !== null) {
+      urls.push(m[0]);
+    }
+
+    return [...new Set(urls)].slice(0, 3);
+  }
+
   const disabledReplyChannelIds = new Set(
     String(process.env.DISABLE_REPLY_CHANNEL_IDS || "")
       .split(",")
@@ -24,6 +48,47 @@ export function registerMessageCreateHandler({
   client.on("messageCreate", async (message) => {
     try {
       if (message.author.bot) return;
+
+      if (message.guildId) {
+        const guard = db
+          .prepare(
+            `SELECT active, mode
+             FROM nsfw_media_guard_rules
+             WHERE guild_id = ? AND channel_id = ? AND active = 1`
+          )
+          .get(message.guildId, message.channel.id);
+
+        if (guard) {
+          const isAdmin = Boolean(message.member?.permissions?.has("Administrator"));
+          if (!isAdmin) {
+            const mode = String(guard.mode || "adult_only").toLowerCase();
+            if (mode === "adult_only") {
+              const imageUrls = extractImageUrlsForGuard(message);
+              if (imageUrls.length > 0) {
+                let adultFound = false;
+                for (const imageUrl of imageUrls) {
+                  const flagged = await ai.isLikelyAdultImage(imageUrl);
+                  if (flagged) {
+                    adultFound = true;
+                    break;
+                  }
+                }
+
+                if (adultFound) {
+                  await message.delete().catch(() => null);
+                  await message.channel
+                    .send(
+                      `🚫 <@${message.author.id}> adult/NSFW media is not allowed in this channel.`
+                    )
+                    .then((m) => setTimeout(() => m.delete().catch(() => null), 8000))
+                    .catch(() => null);
+                  return;
+                }
+              }
+            }
+          }
+        }
+      }
 
       if (message.reference?.messageId) {
         setReplyContext(

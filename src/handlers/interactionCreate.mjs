@@ -3633,6 +3633,148 @@ export function registerInteractionCreateHandler({
         return;
       }
 
+      if (interaction.commandName === "nsfwguard") {
+        if (!interaction.guildId) {
+          await interaction.reply({
+            embeds: [
+              statusEmbed({
+                title: "NSFW Guard",
+                description: "This command only works in a server.",
+                tone: "warn",
+              }),
+            ],
+            ephemeral: true,
+          });
+          return;
+        }
+
+        const isAdmin = Boolean(interaction.memberPermissions?.has("Administrator"));
+        if (!isAdmin) {
+          await interaction.reply({
+            embeds: [
+              statusEmbed({
+                title: "Permission Denied",
+                description: "Only admins can manage NSFW guard channels.",
+                tone: "error",
+              }),
+            ],
+            ephemeral: true,
+          });
+          return;
+        }
+
+        await safeDefer(interaction, { ephemeral: true });
+        const sub = interaction.options.getSubcommand();
+
+        if (sub === "set") {
+          const channel = interaction.options.getChannel("channel", true);
+          if (!channel.isTextBased()) {
+            await interaction.editReply({
+              embeds: [
+                statusEmbed({
+                  title: "Invalid Channel",
+                  description: "Pick a text channel.",
+                  tone: "warn",
+                }),
+              ],
+            });
+            return;
+          }
+
+          db.prepare(`
+            INSERT INTO nsfw_media_guard_rules (
+              guild_id, channel_id, mode, active, created_by, created_at, updated_at
+            )
+            VALUES (?, ?, 'adult_only', 1, ?, strftime('%s','now'), strftime('%s','now'))
+            ON CONFLICT(channel_id) DO UPDATE SET
+              guild_id = excluded.guild_id,
+              mode = excluded.mode,
+              active = 1,
+              updated_at = strftime('%s','now')
+          `).run(interaction.guildId, channel.id, interaction.user.id);
+
+          await interaction.editReply({
+            embeds: [
+              statusEmbed({
+                title: "NSFW Guard Enabled",
+                description:
+                  `Adult/NSFW image auto-delete is now active in <#${channel.id}>.\n` +
+                  "Note: this guard checks image content and only removes flagged adult media from non-admin users.",
+                tone: "success",
+              }),
+            ],
+          });
+          return;
+        }
+
+        if (sub === "list") {
+          const rows = db
+            .prepare(
+              `SELECT id, channel_id, mode, active
+               FROM nsfw_media_guard_rules
+               WHERE guild_id = ?
+               ORDER BY id DESC
+               LIMIT 30`
+            )
+            .all(interaction.guildId);
+
+          if (rows.length === 0) {
+            await interaction.editReply({
+              embeds: [
+                statusEmbed({
+                  title: "NSFW Guard",
+                  description: "No guarded channels configured.",
+                  tone: "info",
+                }),
+              ],
+            });
+            return;
+          }
+
+          const lines = rows.map(
+            (r) =>
+              `#${r.id} | <#${r.channel_id}> | mode:${r.mode || "adult_only"} | ${r.active ? "active" : "inactive"}`
+          );
+          await interaction.editReply({
+            embeds: [
+              statusEmbed({
+                title: "NSFW Guard Channels",
+                description: lines.join("\n"),
+                tone: "info",
+              }),
+            ],
+          });
+          return;
+        }
+
+        if (sub === "remove") {
+          const channel = interaction.options.getChannel("channel", true);
+          const result = db
+            .prepare(
+              `DELETE FROM nsfw_media_guard_rules
+               WHERE guild_id = ? AND channel_id = ?`
+            )
+            .run(interaction.guildId, channel.id);
+
+          await interaction.editReply({
+            embeds: [
+              statusEmbed({
+                title: result.changes > 0 ? "NSFW Guard Disabled" : "No Guard Found",
+                description:
+                  result.changes > 0
+                    ? `Removed guard from <#${channel.id}>.`
+                    : `No guard configured for <#${channel.id}>.`,
+                tone: result.changes > 0 ? "success" : "warn",
+              }),
+            ],
+          });
+          return;
+        }
+
+        await interaction.editReply("That subcommand isn’t wired up 😌");
+        return;
+      }
+
       if (interaction.commandName === "reminder") {
         if (!interaction.guildId) {
           await interaction.reply({
