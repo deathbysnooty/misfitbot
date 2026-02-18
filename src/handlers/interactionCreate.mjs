@@ -133,6 +133,7 @@ export function registerInteractionCreateHandler({
   };
 
   const QUIZ_GENRE_LABELS = {
+    mixed: "Mixed",
     history: "History",
     politics: "Politics",
     sports: "Sports",
@@ -155,7 +156,16 @@ export function registerInteractionCreateHandler({
     return text;
   }
 
-  async function generateQuizQuestion() {
+  function quizCategoryPrompt(category) {
+    const c = String(category || "mixed").toLowerCase();
+    if (!c || c === "mixed" || c === "random") {
+      return "Topic must be mixed/random across history, politics, sports, books, movies, TV, celebrity news, and music.";
+    }
+    const label = QUIZ_GENRE_LABELS[c] || c;
+    return `Topic must be strictly: ${label}. Keep it in that category only.`;
+  }
+
+  async function generateQuizQuestion(category = "mixed") {
     const resp = await openai.chat.completions.create({
       model: "gpt-4.1-mini",
       messages: [
@@ -166,8 +176,7 @@ export function registerInteractionCreateHandler({
         },
         {
           role: "user",
-          content:
-            "Topic must be mixed/random across history, politics, sports, books, movies, TV, celebrity news, and music.",
+          content: quizCategoryPrompt(category),
         },
       ],
       temperature: 0.9,
@@ -211,11 +220,15 @@ export function registerInteractionCreateHandler({
       .trim();
   }
 
-  async function generateUniqueQuizQuestion({ recentQuestionKeys = [], maxTries = 5 }) {
+  async function generateUniqueQuizQuestion({
+    recentQuestionKeys = [],
+    maxTries = 5,
+    category = "mixed",
+  }) {
     const seen = new Set(recentQuestionKeys.filter(Boolean));
 
     for (let i = 0; i < maxTries; i += 1) {
-      const q = await generateQuizQuestion();
+      const q = await generateQuizQuestion(category);
       const key = normalizeQuestionKey(q.question);
       if (!seen.has(key)) return q;
     }
@@ -263,10 +276,11 @@ export function registerInteractionCreateHandler({
         .prepare(
           `SELECT id, genre, question, question_key, options_json, correct_index, explanation, created_by
            FROM quiz_questions
+           WHERE (? = 'mixed' OR genre = ?)
            ORDER BY RANDOM()
            LIMIT 200`
         )
-        .all();
+        .all(session.genre || "mixed", session.genre || "mixed");
     } catch {
       return null;
     }
@@ -317,14 +331,16 @@ export function registerInteractionCreateHandler({
   }
 
   async function getNextQuizPayload(session) {
+    const selectedGenre = String(session.genre || "mixed").toLowerCase();
     async function generateOpenPayload() {
       for (let i = 0; i < 10; i += 1) {
         const generated = await generateUniqueQuizQuestion({
           recentQuestionKeys: Array.from(session.askedQuestionKeys),
           maxTries: 8,
+          category: selectedGenre,
         });
         const saved = insertQuizQuestion({
-          genre: "mixed",
+          genre: selectedGenre,
           difficulty: "mixed",
           question: generated.question,
           options: [generated.answer, ...generated.aliases],
@@ -367,7 +383,7 @@ export function registerInteractionCreateHandler({
           ? online.correctIndex
           : Math.max(0, onlineOptions.findIndex((v) => v === online.answer));
       insertQuizQuestion({
-        genre: "mixed",
+        genre: selectedGenre,
         difficulty: "mixed",
         question: online.question,
         options: onlineOptions,
@@ -387,14 +403,17 @@ export function registerInteractionCreateHandler({
       };
     }
 
-    const preferOpen = Math.random() * 100 < QUIZ_OPEN_ANSWER_PERCENT;
+    const preferOpen =
+      selectedGenre !== "mixed" || Math.random() * 100 < QUIZ_OPEN_ANSWER_PERCENT;
     if (preferOpen) {
       const openPayload = await generateOpenPayload();
       if (openPayload) return openPayload;
     }
 
-    const onlinePayload = await getOnlinePayload();
-    if (onlinePayload) return onlinePayload;
+    if (selectedGenre === "mixed") {
+      const onlinePayload = await getOnlinePayload();
+      if (onlinePayload) return onlinePayload;
+    }
 
     const stored = getStoredQuizQuestion(session);
     if (stored) return stored;
@@ -2137,6 +2156,23 @@ export function registerInteractionCreateHandler({
           }
 
           await safeDefer(interaction, { ephemeral: true });
+          const rawCategory = String(
+            interaction.options.getString("category") || "mixed"
+          ).toLowerCase();
+          const category = rawCategory === "random" ? "mixed" : rawCategory;
+          const allowedCategories = new Set(Object.keys(QUIZ_GENRE_LABELS));
+          if (!allowedCategories.has(category)) {
+            await interaction.editReply({
+              embeds: [
+                statusEmbed({
+                  title: "Quiz",
+                  description: "Invalid category. Use the provided choices.",
+                  tone: "warn",
+                }),
+              ],
+            });
+            return;
+          }
 
           const channelId = QUIZ_CHANNEL_ID || interaction.channelId;
           const lastStartKey =
@@ -2147,7 +2183,7 @@ export function registerInteractionCreateHandler({
             guildId: interaction.guildId,
             channelId,
             startedBy: interaction.user.id,
-            genre: "mixed",
+            genre: category,
             difficulty: "mixed",
             intervalSeconds: QUIZ_NEXT_DELAY_SECONDS,
             recentQuestionKeys: seedRecent,
@@ -2223,7 +2259,7 @@ export function registerInteractionCreateHandler({
                 title: "Quiz Started",
                 description: [
                   `Channel: <#${channelId}>`,
-                  "Mode: mixed topics + mixed difficulty",
+                  `Category: ${QUIZ_GENRE_LABELS[category] || category}`,
                   "Answer type: word/short phrase",
                   `Next question delay: ${session.intervalSeconds}s`,
                   "Use `!hint` in quiz channel for hints",

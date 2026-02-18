@@ -183,7 +183,28 @@ export function getCommands({ ApplicationCommandType }) {
         {
           type: 1,
           name: "start",
-          description: "Start mixed quiz rounds (first correct answer gets 1 point).",
+          description: "Start quiz rounds by category (first correct answer gets 1 point).",
+          options: [
+            {
+              type: 3,
+              name: "category",
+              description: "Quiz category (default: mixed)",
+              required: false,
+              choices: [
+                { name: "mixed", value: "mixed" },
+                { name: "history", value: "history" },
+                { name: "politics", value: "politics" },
+                { name: "sports", value: "sports" },
+                { name: "harry_potter", value: "harry_potter" },
+                { name: "game_of_thrones", value: "game_of_thrones" },
+                { name: "lord_of_the_rings", value: "lord_of_the_rings" },
+                { name: "movies", value: "movies" },
+                { name: "tv_show", value: "tv_show" },
+                { name: "celebrity_news", value: "celebrity_news" },
+                { name: "music", value: "music" },
+              ],
+            },
+          ],
         },
         {
           type: 1,
@@ -935,7 +956,7 @@ export function getHelpText() {
     "• `/summarizechannel count:<1-100>`",
     "• `/voicenote text:<text> [voice]`",
     "• `/beautify [text] [message:<link>] [style]`",
-    "• `/quiz start`",
+    "• `/quiz start [category]`",
     "• `!hint` in quiz channel for a hint",
     "• `/quiz leaderboard [limit]`",
     "• `/quiz skip`",
