@@ -333,10 +333,11 @@ export function registerInteractionCreateHandler({
   async function getNextQuizPayload(session) {
     const selectedGenre = String(session.genre || "mixed").toLowerCase();
     async function generateOpenPayload() {
+      let duplicateFallback = null;
       for (let i = 0; i < 10; i += 1) {
         const generated = await generateUniqueQuizQuestion({
           recentQuestionKeys: Array.from(session.askedQuestionKeys),
-          maxTries: 8,
+          maxTries: 12,
           category: selectedGenre,
         });
         const saved = insertQuizQuestion({
@@ -349,9 +350,7 @@ export function registerInteractionCreateHandler({
           createdBy: session.startedBy,
         });
         const key = saved.questionKey || normalizeQuestionKey(generated.question);
-        if (session.askedQuestionKeys.has(key)) continue;
-
-        return {
+        const payload = {
           id: null,
           question: generated.question,
           questionKey: key,
@@ -361,8 +360,16 @@ export function registerInteractionCreateHandler({
           displayOptions: [],
           explanation: generated.explanation,
         };
+        if (session.askedQuestionKeys.has(key)) {
+          // In narrow categories, strict uniqueness can stall the quiz.
+          // Keep one duplicate fallback so rounds never deadlock.
+          duplicateFallback = payload;
+          continue;
+        }
+
+        return payload;
       }
-      return null;
+      return duplicateFallback;
     }
 
     async function getOnlinePayload() {
