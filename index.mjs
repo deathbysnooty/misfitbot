@@ -46,6 +46,7 @@ import {
 import { createAiService } from "./src/services/ai.mjs";
 import { createSchedulerService } from "./src/services/scheduler.mjs";
 import { createTriviaService } from "./src/services/trivia.mjs";
+import { createDashboardService } from "./src/services/dashboard.mjs";
 import { registerGuildMemberAddHandler } from "./src/handlers/guildMemberAdd.mjs";
 import { registerMessageCreateHandler } from "./src/handlers/messageCreate.mjs";
 import { registerInteractionCreateHandler } from "./src/handlers/interactionCreate.mjs";
@@ -107,6 +108,14 @@ const scheduler = createSchedulerService({
   schedulerPollMs: SCHEDULER_POLL_MS,
 });
 const trivia = createTriviaService();
+const dashboard = createDashboardService({
+  db,
+  client,
+  getBotMode,
+  setBotMode,
+  ownerId: OWNER_ID,
+  clampPurgeScanLimit,
+});
 
 const commands = getCommands({ ApplicationCommandType });
 const helpText = getHelpText();
@@ -115,6 +124,7 @@ client.once("ready", async () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
   await registerCommands(client, commands);
   scheduler.startScheduler();
+  dashboard.start();
 });
 
 registerGuildMemberAddHandler({
