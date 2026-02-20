@@ -150,6 +150,42 @@ export function createDb({ dbPath, defaultBotMode }) {
   `);
 
   db.exec(`
+    CREATE TABLE IF NOT EXISTS message_ttl_rules (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      guild_id TEXT NOT NULL,
+      channel_id TEXT NOT NULL UNIQUE,
+      ttl_seconds INTEGER NOT NULL,
+      active INTEGER NOT NULL DEFAULT 1,
+      created_by TEXT NOT NULL DEFAULT '',
+      created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+      updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+    );
+  `);
+
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_message_ttl_rules_lookup
+    ON message_ttl_rules (guild_id, channel_id, active);
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS message_ttl_queue (
+      message_id TEXT PRIMARY KEY,
+      guild_id TEXT NOT NULL,
+      channel_id TEXT NOT NULL,
+      delete_at INTEGER NOT NULL,
+      active INTEGER NOT NULL DEFAULT 1,
+      last_error TEXT NOT NULL DEFAULT '',
+      created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+      updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+    );
+  `);
+
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_message_ttl_queue_due
+    ON message_ttl_queue (active, delete_at);
+  `);
+
+  db.exec(`
     CREATE TABLE IF NOT EXISTS mbti_sessions (
       guild_id TEXT NOT NULL,
       user_id TEXT NOT NULL,

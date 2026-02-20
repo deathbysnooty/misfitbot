@@ -763,6 +763,55 @@ export function getCommands({ ApplicationCommandType }) {
             },
           ],
         },
+        {
+          type: 1,
+          name: "msgttl_set",
+          description: "Auto-delete each new message in a channel after N units.",
+          options: [
+            {
+              type: 7,
+              name: "channel",
+              description: "Target channel",
+              required: true,
+            },
+            {
+              type: 4,
+              name: "every",
+              description: "Delete each message after N units",
+              required: true,
+            },
+            {
+              type: 3,
+              name: "unit",
+              description: "TTL unit",
+              required: false,
+              choices: [
+                { name: "seconds", value: "seconds" },
+                { name: "minutes", value: "minutes" },
+                { name: "hours", value: "hours" },
+                { name: "days", value: "days" },
+              ],
+            },
+          ],
+        },
+        {
+          type: 1,
+          name: "msgttl_list",
+          description: "List per-message auto-delete rules in this server.",
+        },
+        {
+          type: 1,
+          name: "msgttl_remove",
+          description: "Remove per-message auto-delete rule by ID.",
+          options: [
+            {
+              type: 4,
+              name: "id",
+              description: "Rule ID from msgttl_list",
+              required: true,
+            },
+          ],
+        },
       ],
     },
     {
@@ -956,6 +1005,7 @@ export function getHelpText() {
     "• `/preset add|send|list|remove` (admin only)",
     "• `/nsfwguard set|list|remove` (admin only, deletes adult/NSFW images only)",
     "• `/purge media|nonadmin|all` and `/purge autopurge_set|autopurge_list|autopurge_remove` (owner)",
+    "• `/purge msgttl_set|msgttl_list|msgttl_remove` (owner, per-message auto-delete)",
     "",
     "**Personal reminders (all users):**",
     "• `/timezone set|show|clear` (city/timezone for local reminders)",

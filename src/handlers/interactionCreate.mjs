@@ -3492,6 +3492,138 @@ export function registerInteractionCreateHandler({
           return;
         }
 
+        if (sub === "msgttl_set") {
+          const channel = interaction.options.getChannel("channel", true);
+          if (!channel.isTextBased()) {
+            await interaction.editReply("Target channel must be text-based.");
+            return;
+          }
+
+          let every = interaction.options.getInteger("every", true);
+          const unit = (interaction.options.getString("unit") || "minutes").toLowerCase();
+          const unitMap = {
+            seconds: 1,
+            minutes: 60,
+            hours: 3600,
+            days: 86400,
+          };
+          const mult = unitMap[unit];
+          if (!mult) {
+            await interaction.editReply("Invalid `unit`. Use seconds, minutes, hours, or days.");
+            return;
+          }
+          if (every < 1) every = 1;
+
+          const ttlSeconds = every * mult;
+          if (ttlSeconds < 5) {
+            await interaction.editReply("Minimum TTL is 5 seconds.");
+            return;
+          }
+          if (ttlSeconds > 86400 * 30) {
+            await interaction.editReply("Maximum TTL is 30 days.");
+            return;
+          }
+
+          db.prepare(`
+            INSERT INTO message_ttl_rules (
+              guild_id, channel_id, ttl_seconds, active, created_by, created_at, updated_at
+            )
+            VALUES (?, ?, ?, 1, ?, strftime('%s','now'), strftime('%s','now'))
+            ON CONFLICT(channel_id) DO UPDATE SET
+              guild_id = excluded.guild_id,
+              ttl_seconds = excluded.ttl_seconds,
+              active = 1,
+              updated_at = strftime('%s','now')
+          `).run(interaction.guildId, channel.id, ttlSeconds, interaction.user.id);
+
+          await interaction.editReply({
+            embeds: [
+              statusEmbed({
+                title: "Message TTL Rule Set",
+                description: [
+                  `Channel: <#${channel.id}>`,
+                  `Each new message will be deleted after: ${every} ${unit}`,
+                ].join("\n"),
+                tone: "success",
+              }),
+            ],
+          });
+          return;
+        }
+
+        if (sub === "msgttl_list") {
+          const rows = db
+            .prepare(
+              `SELECT id, channel_id, ttl_seconds, active
+               FROM message_ttl_rules
+               WHERE guild_id = ?
+               ORDER BY id DESC
+               LIMIT 30`
+            )
+            .all(interaction.guildId);
+
+          if (rows.length === 0) {
+            await interaction.editReply({
+              embeds: [
+                statusEmbed({
+                  title: "Message TTL Rules",
+                  description: "No per-message auto-delete rules found.",
+                  tone: "info",
+                }),
+              ],
+            });
+            return;
+          }
+
+          const lines = rows.map((r) => {
+            const secs = Math.max(1, Number(r.ttl_seconds || 0));
+            let label = `${secs}s`;
+            if (secs % 86400 === 0) label = `${secs / 86400}d`;
+            else if (secs % 3600 === 0) label = `${secs / 3600}h`;
+            else if (secs % 60 === 0) label = `${secs / 60}m`;
+            return `#${r.id} | <#${r.channel_id}> | delete-after ${label} | ${r.active ? "active" : "inactive"}`;
+          });
+
+          await interaction.editReply({
+            embeds: [
+              statusEmbed({
+                title: "Message TTL Rules",
+                description: lines.join("\n").slice(0, 3800),
+                tone: "info",
+              }),
+            ],
+          });
+          return;
+        }
+
+        if (sub === "msgttl_remove") {
+          const id = interaction.options.getInteger("id", true);
+          const result = db
+            .prepare(`DELETE FROM message_ttl_rules WHERE id = ? AND guild_id = ?`)
+            .run(id, interaction.guildId);
+          if (result.changes > 0) {
+            db.prepare(
+              `UPDATE message_ttl_queue
+               SET active = 0, updated_at = strftime('%s','now')
+               WHERE guild_id = ?
+                 AND channel_id NOT IN (
+                   SELECT channel_id FROM message_ttl_rules WHERE guild_id = ? AND active = 1
+                 )`
+            ).run(interaction.guildId, interaction.guildId);
+          }
+
+          await interaction.editReply({
+            embeds: [
+              statusEmbed({
+                title: result.changes > 0 ? "Message TTL Rule Removed" : "Rule Not Found",
+                description: result.changes > 0 ? `#${id}` : `No rule #${id} found.`,
+                tone: result.changes > 0 ? "success" : "warn",
+              }),
+            ],
+          });
+          return;
+        }
+
         await interaction.editReply("That subcommand isn’t wired up 😌");
         return;
       }

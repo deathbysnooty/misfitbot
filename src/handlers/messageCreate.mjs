@@ -50,6 +50,29 @@ export function registerMessageCreateHandler({
       if (message.author.bot) return;
 
       if (message.guildId) {
+        const ttlRule = db
+          .prepare(
+            `SELECT ttl_seconds
+             FROM message_ttl_rules
+             WHERE guild_id = ? AND channel_id = ? AND active = 1`
+          )
+          .get(message.guildId, message.channel.id);
+        if (ttlRule?.ttl_seconds) {
+          const now = Math.floor(Date.now() / 1000);
+          const ttlSeconds = Math.max(5, Number(ttlRule.ttl_seconds || 0));
+          db.prepare(
+            `INSERT INTO message_ttl_queue (
+               message_id, guild_id, channel_id, delete_at, active, last_error, created_at, updated_at
+             )
+             VALUES (?, ?, ?, ?, 1, '', strftime('%s','now'), strftime('%s','now'))
+             ON CONFLICT(message_id) DO UPDATE SET
+               delete_at = excluded.delete_at,
+               active = 1,
+               last_error = '',
+               updated_at = strftime('%s','now')`
+          ).run(message.id, message.guildId, message.channel.id, now + ttlSeconds);
+        }
+
         const guard = db
           .prepare(
             `SELECT active, mode

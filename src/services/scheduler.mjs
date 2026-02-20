@@ -9,6 +9,7 @@ export function createSchedulerService({
   let schedulerBusy = false;
   let autoPurgeBusy = false;
   let reminderBusy = false;
+  let messageTtlBusy = false;
 
   async function isMessageAuthorAdmin(msg, memberPermCache) {
     if (!msg?.guild || !msg?.author?.id) return false;
@@ -321,6 +322,51 @@ export function createSchedulerService({
     }
   }
 
+  async function processDueMessageTtlDeletes() {
+    if (messageTtlBusy) return;
+    messageTtlBusy = true;
+    try {
+      const now = Math.floor(Date.now() / 1000);
+      const due = db
+        .prepare(
+          `SELECT message_id, guild_id, channel_id
+           FROM message_ttl_queue
+           WHERE active = 1 AND delete_at <= ?
+           ORDER BY delete_at ASC
+           LIMIT 100`
+        )
+        .all(now);
+
+      for (const row of due) {
+        try {
+          const channel = await client.channels.fetch(row.channel_id).catch(() => null);
+          if (!channel?.isTextBased()) {
+            throw new Error("Channel unavailable.");
+          }
+
+          const msg = await channel.messages.fetch(row.message_id).catch(() => null);
+          if (msg) await msg.delete().catch(() => null);
+
+          db.prepare(`
+            UPDATE message_ttl_queue
+            SET active = 0, last_error = '', updated_at = strftime('%s','now')
+            WHERE message_id = ?
+          `).run(row.message_id);
+        } catch (err) {
+          const errText = String(err?.message || err || "unknown error").slice(0, 240);
+          db.prepare(`
+            UPDATE message_ttl_queue
+            SET delete_at = ?, last_error = ?, updated_at = strftime('%s','now')
+            WHERE message_id = ?
+          `).run(now + 60, errText, row.message_id);
+          console.error(`Message TTL delete failed #${row.message_id}:`, err);
+        }
+      }
+    } finally {
+      messageTtlBusy = false;
+    }
+  }
+
   function startScheduler() {
     if (schedulerTimer) clearInterval(schedulerTimer);
     processDueScheduledMessages().catch((e) =>
@@ -332,6 +378,9 @@ export function createSchedulerService({
     processDueReminders().catch((e) =>
       console.error("Reminder startup tick failed:", e)
     );
+    processDueMessageTtlDeletes().catch((e) =>
+      console.error("Message TTL startup tick failed:", e)
+    );
     schedulerTimer = setInterval(() => {
       processDueScheduledMessages().catch((e) =>
         console.error("Scheduler tick failed:", e)
@@ -341,6 +390,9 @@ export function createSchedulerService({
       );
       processDueReminders().catch((e) =>
         console.error("Reminder tick failed:", e)
+      );
+      processDueMessageTtlDeletes().catch((e) =>
+        console.error("Message TTL tick failed:", e)
       );
     }, schedulerPollMs);
     schedulerTimer.unref?.();
