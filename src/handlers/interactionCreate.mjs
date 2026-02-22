@@ -93,7 +93,7 @@ export function registerInteractionCreateHandler({
   );
   const QUIZ_OPEN_ANSWER_PERCENT = Math.max(
     0,
-    Math.min(100, Number(process.env.QUIZ_OPEN_ANSWER_PERCENT || 35) || 35)
+    Math.min(100, Number(process.env.QUIZ_OPEN_ANSWER_PERCENT || 50) || 50)
   );
   const BOT_GUIDE_URL = String(
     process.env.BOT_GUIDE_URL || "https://deathbysnooty.github.io/misfitbot/"
