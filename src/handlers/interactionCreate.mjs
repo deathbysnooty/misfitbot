@@ -375,6 +375,7 @@ export function registerInteractionCreateHandler({
     async function getOnlinePayload() {
       const online = await trivia?.getQuestion?.({
         avoidQuestionKeys: Array.from(session.askedQuestionKeys),
+        category: selectedGenre,
       });
       if (!online?.question || !online?.answer) return null;
       const key = normalizeQuestionKey(online.question);
@@ -410,17 +411,14 @@ export function registerInteractionCreateHandler({
       };
     }
 
-    const preferOpen =
-      selectedGenre !== "mixed" || Math.random() * 100 < QUIZ_OPEN_ANSWER_PERCENT;
+    const preferOpen = Math.random() * 100 < QUIZ_OPEN_ANSWER_PERCENT;
     if (preferOpen) {
       const openPayload = await generateOpenPayload();
       if (openPayload) return openPayload;
     }
 
-    if (selectedGenre === "mixed") {
-      const onlinePayload = await getOnlinePayload();
-      if (onlinePayload) return onlinePayload;
-    }
+    const onlinePayload = await getOnlinePayload();
+    if (onlinePayload) return onlinePayload;
 
     const stored = getStoredQuizQuestion(session);
     if (stored) return stored;
