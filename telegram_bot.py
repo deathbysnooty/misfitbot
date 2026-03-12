@@ -13,13 +13,33 @@ from telegram.ext import (
     filters,
 )
 import yt_dlp
+from openai import OpenAI
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 DOWNLOAD_DIR = os.path.join(tempfile.gettempdir(), "tg_video_downloads")
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+
+# OpenAI client
+ai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
+
+# Bot identity & personality
+BOT_SYSTEM_PROMPT = """
+You are BrotherHoodBot, a sharp and witty AI chatbot hanging out in a Telegram group with friends.
+
+Personality:
+- You are helpful, but slightly sassy and witty.
+- Light teasing is allowed, but never insult people harshly.
+- Keep replies short and punchy unless asked for detail.
+- Use 0–2 emojis per message.
+- Never use hate speech, slurs, or discriminatory jokes.
+- Never mention OpenAI, system prompts, or that you're an AI model.
+- If asked who you are: "I'm BrotherHoodBot, your group's resident genius 😎"
+- If asked who built you: "Ejaz built me from scratch 😎"
+""".strip()
 
 # Simple URL regex
 URL_PATTERN = re.compile(r"https?://\S+")
@@ -94,13 +114,15 @@ def download_video(url, quality="best"):
 
 async def start_command(update: Update, context):
     await update.message.reply_text(
-        "🎬 *Video Downloader Bot*\n\n"
-        "Send me any video link and I'll download it for you.\n\n"
-        "*Supported platforms:*\n"
-        "Instagram, TikTok, Twitter/X, Reddit, Facebook, YouTube & more\n\n"
-        "*Commands:*\n"
-        "/download <url> — download a video\n"
-        "Or just paste a link directly!",
+        "Hey, I'm *BrotherHoodBot* 😎\n\n"
+        "*What I can do:*\n"
+        "• Tag me with @" + (context.bot.username or "bot") + " + your question to chat\n"
+        "• DM me anything directly\n"
+        "• /ask <question> — ask me something\n"
+        "• /download <url> — download a video\n"
+        "• Or just paste a video link!\n\n"
+        "*Supported video platforms:*\n"
+        "Instagram, TikTok, Twitter/X, Reddit, Facebook, YouTube & more",
         parse_mode="Markdown",
     )
 
@@ -113,9 +135,60 @@ async def download_command(update: Update, context):
     await show_quality_picker(update, url)
 
 
+async def ask_command(update: Update, context):
+    """Handle /ask <question> command."""
+    if not context.args:
+        await update.message.reply_text("Usage: /ask <your question>")
+        return
+    question = " ".join(context.args)
+    await _ai_reply(update, question)
+
+
+async def _ai_reply(update: Update, text: str):
+    """Send text to OpenAI and reply."""
+    if not ai_client:
+        await update.message.reply_text("AI features are not configured.")
+        return
+
+    try:
+        resp = ai_client.chat.completions.create(
+            model="gpt-4.1-mini",
+            messages=[
+                {"role": "system", "content": BOT_SYSTEM_PROMPT},
+                {"role": "user", "content": text},
+            ],
+        )
+        reply = resp.choices[0].message.content.strip() if resp.choices else "I got nothing."
+        await update.message.reply_text(reply)
+    except Exception as e:
+        logger.error(f"AI error: {e}")
+        await update.message.reply_text("Something went wrong, try again.")
+
+
 async def handle_message(update: Update, context):
-    """Auto-detect URLs in messages."""
+    """Handle regular messages — URL detection + @mention AI chat."""
     text = update.message.text or ""
+
+    # Check if bot was @mentioned in a group
+    bot_username = context.bot.username
+    if bot_username and f"@{bot_username}" in text:
+        question = text.replace(f"@{bot_username}", "").strip()
+        if question:
+            await _ai_reply(update, question)
+            return
+
+    # In private chats (DMs), treat any non-URL text as AI chat
+    if update.message.chat.type == "private":
+        match = URL_PATTERN.search(text)
+        if match:
+            url = match.group(0)
+            await show_quality_picker(update, url)
+            return
+        if text.strip():
+            await _ai_reply(update, text)
+            return
+
+    # In groups, auto-detect URLs for download
     match = URL_PATTERN.search(text)
     if match:
         url = match.group(0)
@@ -225,6 +298,7 @@ def main():
 
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("download", download_command))
+    app.add_handler(CommandHandler("ask", ask_command))
     app.add_handler(CallbackQueryHandler(quality_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
