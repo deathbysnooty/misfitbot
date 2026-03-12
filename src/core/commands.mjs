@@ -953,6 +953,30 @@ export function getCommands({ ApplicationCommandType }) {
         },
       ],
     },
+    {
+      name: "download",
+      description: "Download a video from a URL (Instagram, YouTube, TikTok, etc).",
+      options: [
+        {
+          name: "url",
+          description: "Video URL to download",
+          type: 3,
+          required: true,
+        },
+        {
+          name: "quality",
+          description: "Video quality",
+          type: 3,
+          required: false,
+          choices: [
+            { name: "Best", value: "best" },
+            { name: "720p", value: "medium" },
+            { name: "480p", value: "low" },
+            { name: "Audio only", value: "audio" },
+          ],
+        },
+      ],
+    },
     { name: "Misfit: Summarize", type: ApplicationCommandType.Message },
     { name: "Misfit: Analyze Image", type: ApplicationCommandType.Message },
     { name: "Misfit: Transcribe Voice", type: ApplicationCommandType.Message },
@@ -970,6 +994,7 @@ export function getCommands({ ApplicationCommandType }) {
     "transcribe",
     "voicenote",
     "beautify",
+    "download",
   ]);
 
   return commands.map((cmd) => {
@@ -1035,6 +1060,7 @@ export function getHelpText() {
     "• `/summarizechannel count:<1-100>`",
     "• `/voicenote text:<text> [voice]`",
     "• `/beautify [text] [message:<link>] [style]`",
+    "• `/download url:<video-url> [quality:Best|720p|480p|Audio]` — download video from Instagram, YouTube, TikTok, etc.",
     "• `/quiz start [category:mixed|history|politics|sports|harry_potter|game_of_thrones|lord_of_the_rings|movies|tv_show|celebrity_news|music]`",
     "• `!hint` in quiz channel for a hint",
     "• `/quiz leaderboard [limit]`",

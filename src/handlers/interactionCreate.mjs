@@ -4636,6 +4636,75 @@ export function registerInteractionCreateHandler({
         return;
       }
 
+      if (interaction.commandName === "download") {
+        const url = interaction.options.getString("url", true).trim();
+        const quality = interaction.options.getString("quality") || "best";
+
+        const formatMap = {
+          best: "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+          medium: "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best",
+          low: "bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480][ext=mp4]/best",
+          audio: "bestaudio[ext=m4a]/bestaudio",
+        };
+
+        const { execFile } = await import("node:child_process");
+        const { promisify } = await import("node:util");
+        const fs = await import("node:fs");
+        const os = await import("node:os");
+        const path = await import("node:path");
+        const execFileAsync = promisify(execFile);
+
+        const tmpDir = path.join(os.tmpdir(), "misfit_dl");
+        fs.mkdirSync(tmpDir, { recursive: true });
+
+        const outTemplate = path.join(tmpDir, `%(title).50s_${Date.now()}.%(ext)s`);
+
+        try {
+          const { stdout } = await execFileAsync("yt-dlp", [
+            "--no-playlist",
+            "-f", formatMap[quality] || formatMap.best,
+            "--merge-output-format", "mp4",
+            "-o", outTemplate,
+            "--print", "after_move:filepath",
+            url,
+          ], { timeout: 120_000 });
+
+          const filePath = stdout.trim().split("\n").pop();
+
+          if (!filePath || !fs.existsSync(filePath)) {
+            await interaction.editReply("❌ Download failed — file not found.");
+            return;
+          }
+
+          const stats = fs.statSync(filePath);
+          const maxSize = 25 * 1024 * 1024; // 25 MB Discord limit
+
+          if (stats.size > maxSize) {
+            fs.unlinkSync(filePath);
+            await interaction.editReply(
+              `❌ File too large (${(stats.size / 1024 / 1024).toFixed(1)} MB). Discord limit is 25 MB. Try a lower quality.`
+            );
+            return;
+          }
+
+          const file = new AttachmentBuilder(filePath, {
+            name: path.basename(filePath),
+          });
+
+          await interaction.editReply({
+            content: `🎬 Here's your video (${quality}):`,
+            files: [file],
+          });
+
+          // Clean up after sending
+          try { fs.unlinkSync(filePath); } catch {}
+        } catch (err) {
+          const msg = err.stderr || err.message || "Unknown error";
+          await interaction.editReply(`❌ Download failed: ${msg.slice(0, 1800)}`);
+        }
+        return;
+      }
+
       if (interaction.commandName === "voicenote") {
         const text = interaction.options.getString("text", true).trim().slice(0, 3000);
         const voice = (interaction.options.getString("voice") || "alloy").toLowerCase();
