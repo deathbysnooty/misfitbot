@@ -13,7 +13,11 @@ from telegram.ext import (
     filters,
 )
 import yt_dlp
-from openai import OpenAI
+
+try:
+    from openai import OpenAI
+except ImportError:
+    OpenAI = None
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -24,7 +28,7 @@ DOWNLOAD_DIR = os.path.join(tempfile.gettempdir(), "tg_video_downloads")
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 # OpenAI client
-ai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
+ai_client = OpenAI(api_key=OPENAI_API_KEY) if (OpenAI and OPENAI_API_KEY) else None
 
 # Bot identity & personality
 BOT_SYSTEM_PROMPT = """
