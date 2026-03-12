@@ -4709,8 +4709,20 @@ export function registerInteractionCreateHandler({
           // Clean up after sending
           try { fs.unlinkSync(filePath); } catch {}
         } catch (err) {
-          const msg = err.stderr || err.message || "Unknown error";
-          await interaction.editReply(`❌ Download failed: ${msg.slice(0, 1800)}`);
+          const raw = err.stderr || err.message || "Unknown error";
+          let msg;
+          if (/Sign in to confirm|cookies/.test(raw)) {
+            msg = "❌ YouTube requires sign-in for this video. YouTube blocks server-based downloads.\n\nTry Instagram, TikTok, Twitter/X, or Reddit links instead — those work great.";
+          } else if (/Video unavailable|Private video/.test(raw)) {
+            msg = "❌ This video is private or unavailable.";
+          } else if (/Unsupported URL/.test(raw)) {
+            msg = "❌ Unsupported URL. Supported: Instagram, TikTok, Twitter/X, Reddit, Facebook, and more.";
+          } else {
+            // Extract just the ERROR line(s) from yt-dlp output
+            const errorLines = raw.split("\n").filter(l => /^ERROR/i.test(l)).join("\n");
+            msg = `❌ Download failed: ${(errorLines || raw).slice(0, 500)}`;
+          }
+          await interaction.editReply(msg);
         }
         return;
       }
