@@ -195,3 +195,18 @@ registerInteractionCreateHandler({
 });
 
 client.login(process.env.DISCORD_TOKEN);
+
+// Start Telegram bot as a child process (if token is set)
+if (process.env.TELEGRAM_BOT_TOKEN) {
+  import("node:child_process").then(({ spawn }) => {
+    const tg = spawn("python3", ["telegram_bot.py"], {
+      stdio: "inherit",
+      env: process.env,
+    });
+    tg.on("error", (err) => console.error("❌ Telegram bot failed to start:", err.message));
+    tg.on("exit", (code) => {
+      if (code) console.error(`⚠️ Telegram bot exited with code ${code}`);
+    });
+    console.log("🤖 Telegram bot spawned");
+  });
+}

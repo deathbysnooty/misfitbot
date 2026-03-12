@@ -34,3 +34,12 @@ if (!existsSync(ffmpeg)) {
 }
 
 console.log("🎬 All download dependencies ready in ./bin/");
+
+// Install Python telegram bot deps
+console.log("⬇️  Installing Python dependencies for Telegram bot...");
+try {
+  execSync("pip3 install --break-system-packages --user python-telegram-bot yt-dlp 2>&1 || pip install --user python-telegram-bot yt-dlp 2>&1", { stdio: "inherit" });
+  console.log("✅ Python deps installed");
+} catch (e) {
+  console.log("⚠️  Python deps install failed (Telegram bot may not work):", e.message);
+}
