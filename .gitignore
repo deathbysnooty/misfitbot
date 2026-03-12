@@ -1,5 +1,6 @@
 .env
 node_modules/
 bin/
+pylibs/
 .DS_Store
 *.sqlite

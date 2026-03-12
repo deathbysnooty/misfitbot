@@ -35,11 +35,13 @@ if (!existsSync(ffmpeg)) {
 
 console.log("🎬 All download dependencies ready in ./bin/");
 
-// Install Python telegram bot deps
+// Install Python telegram bot deps into project directory
+const pyLibDir = join(process.cwd(), "pylibs");
+execSync(`mkdir -p ${pyLibDir}`);
 console.log("⬇️  Installing Python dependencies for Telegram bot...");
 try {
-  execSync("pip3 install --break-system-packages --user python-telegram-bot yt-dlp openai 2>&1 || pip install --user python-telegram-bot yt-dlp openai 2>&1", { stdio: "inherit" });
-  console.log("✅ Python deps installed");
+  execSync(`pip3 install --break-system-packages --target ${pyLibDir} python-telegram-bot yt-dlp openai 2>&1 || pip install --target ${pyLibDir} python-telegram-bot yt-dlp openai 2>&1`, { stdio: "inherit" });
+  console.log("✅ Python deps installed to ./pylibs/");
 } catch (e) {
   console.log("⚠️  Python deps install failed (Telegram bot may not work):", e.message);
 }

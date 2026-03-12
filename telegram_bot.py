@@ -1,4 +1,9 @@
+import sys
 import os
+
+# Add pylibs to path (Render installs deps there during build)
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "pylibs"))
+
 import re
 import tempfile
 import time
