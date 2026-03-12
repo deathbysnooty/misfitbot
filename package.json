@@ -4,6 +4,7 @@
   "type": "module",
   "main": "index.mjs",
   "scripts": {
+    "build": "node scripts/install-ytdlp.mjs",
     "start": "node index.mjs"
   },
   "dependencies": {

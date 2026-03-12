@@ -4659,15 +4659,25 @@ export function registerInteractionCreateHandler({
 
         const outTemplate = path.join(tmpDir, `%(title).50s_${Date.now()}.%(ext)s`);
 
+        // Use local bin/ if available (Render), else system PATH
+        const binDir = path.join(process.cwd(), "bin");
+        const ytdlpBin = fs.existsSync(path.join(binDir, "yt-dlp"))
+          ? path.join(binDir, "yt-dlp") : "yt-dlp";
+        const ffmpegDir = fs.existsSync(path.join(binDir, "ffmpeg"))
+          ? binDir : undefined;
+
+        const dlArgs = [
+          "--no-playlist",
+          "-f", formatMap[quality] || formatMap.best,
+          "--merge-output-format", "mp4",
+          "-o", outTemplate,
+          "--print", "after_move:filepath",
+          url,
+        ];
+        if (ffmpegDir) dlArgs.unshift("--ffmpeg-location", ffmpegDir);
+
         try {
-          const { stdout } = await execFileAsync("yt-dlp", [
-            "--no-playlist",
-            "-f", formatMap[quality] || formatMap.best,
-            "--merge-output-format", "mp4",
-            "-o", outTemplate,
-            "--print", "after_move:filepath",
-            url,
-          ], { timeout: 120_000 });
+          const { stdout } = await execFileAsync(ytdlpBin, dlArgs, { timeout: 120_000 });
 
           const filePath = stdout.trim().split("\n").pop();
 

@@ -1,2 +1,5 @@
 .env
 node_modules/
+bin/
+.DS_Store
+*.sqlite
