@@ -145,6 +145,19 @@ export function registerInteractionCreateHandler({
     return normalizePresetTitle(input).toLowerCase();
   }
 
+  function parseReminderIntervalSeconds(every, unit, allowedUnits) {
+    if (!Number.isInteger(every) || every <= 0) return 0;
+    const unitKey = String(unit || "minutes").toLowerCase();
+    const unitMap = {
+      seconds: 1,
+      minutes: 60,
+      hours: 3600,
+      days: 86400,
+    };
+    if (allowedUnits && !allowedUnits.has(unitKey)) return -1;
+    return every * (unitMap[unitKey] || 60);
+  }
+
   async function ensureBusinessChannels(guild) {
     const desiredChannels = [
       "daily-briefing",
@@ -1345,6 +1358,226 @@ export function registerInteractionCreateHandler({
           return;
         }
 
+        if (
+          interaction.isChatInputCommand() &&
+          interaction.commandName === "personal_reminder"
+        ) {
+          await safeDefer(interaction, { ephemeral: true });
+          const sub = interaction.options.getSubcommand();
+          const now = Math.floor(Date.now() / 1000);
+
+          if (sub === "add") {
+            const whenRaw = interaction.options.getString("when", true);
+            const sendAt = parseScheduleTimeToUnixSeconds(whenRaw);
+            if (!sendAt || sendAt <= now + 2) {
+              await interaction.editReply(
+                "Use a future time: ISO UTC, unix, `dd/hh/mm`, `hh/mm`, or token form like `1d2h30m`."
+              );
+              return;
+            }
+
+            const message = interaction.options.getString("message", true).trim().slice(0, 1800);
+            if (!message) {
+              await interaction.editReply("Reminder message cannot be empty.");
+              return;
+            }
+
+            const every = interaction.options.getInteger("every");
+            const intervalSeconds = parseReminderIntervalSeconds(
+              every,
+              interaction.options.getString("unit"),
+              new Set(["seconds", "minutes", "hours", "days"])
+            );
+            if (intervalSeconds === -1) {
+              await interaction.editReply("Invalid repeat unit.");
+              return;
+            }
+            if (intervalSeconds > 0 && intervalSeconds < 5) {
+              await interaction.editReply("Minimum repeat interval is 5 seconds.");
+              return;
+            }
+            if (intervalSeconds > 86400 * 30) {
+              await interaction.editReply("Maximum repeat interval is 30 days.");
+              return;
+            }
+
+            const result = db.prepare(`
+              INSERT INTO user_reminders (
+                user_id, guild_id, message, send_at, interval_seconds, active, last_error, created_at, updated_at
+              )
+              VALUES (?, ?, ?, ?, ?, 1, '', strftime('%s','now'), strftime('%s','now'))
+            `).run(interaction.user.id, interaction.guildId || "0", message, sendAt, intervalSeconds);
+
+            await interaction.editReply(
+              `Personal reminder #${result.lastInsertRowid} created.\nWhen: <t:${sendAt}:F>\nRepeat: ${formatIntervalLabel(intervalSeconds)}\nDelivery: DM`
+            );
+            return;
+          }
+
+          if (sub === "list") {
+            const rows = db.prepare(`
+              SELECT id, message, send_at, interval_seconds, active, last_error
+              FROM user_reminders
+              WHERE user_id = ? AND active = 1
+              ORDER BY send_at ASC
+              LIMIT 25
+            `).all(interaction.user.id);
+            if (!rows.length) {
+              await interaction.editReply("No personal reminders found.");
+              return;
+            }
+            await interaction.editReply(
+              rows
+                .map(
+                  (r) =>
+                    `#${r.id} | <t:${r.send_at}:R> | ${formatIntervalLabel(r.interval_seconds)} | "${String(
+                      r.message || ""
+                    ).slice(0, 80)}"${r.last_error ? ` | err: ${r.last_error}` : ""}`
+                )
+                .join("\n")
+                .slice(0, 1900)
+            );
+            return;
+          }
+
+          if (sub === "remove") {
+            const id = interaction.options.getInteger("id", true);
+            const result = db.prepare(`
+              DELETE FROM user_reminders
+              WHERE id = ? AND user_id = ?
+            `).run(id, interaction.user.id);
+            await interaction.editReply(
+              result.changes > 0
+                ? `Removed personal reminder #${id}.`
+                : `No personal reminder #${id} found.`
+            );
+            return;
+          }
+        }
+
+        if (
+          interaction.isChatInputCommand() &&
+          interaction.commandName === "business_reminder"
+        ) {
+          if (!interaction.guildId) {
+            await interaction.reply({
+              content: "This command only works in a server.",
+              ephemeral: true,
+            });
+            return;
+          }
+
+          const isOwner = interaction.user.id === OWNER_ID;
+          const isAdmin = Boolean(interaction.memberPermissions?.has("ManageGuild"));
+          if (!isOwner && !isAdmin) {
+            await interaction.reply({
+              content: "Only admins (or Snooty) can manage business reminders.",
+              ephemeral: true,
+            });
+            return;
+          }
+
+          await safeDefer(interaction, { ephemeral: true });
+          const sub = interaction.options.getSubcommand();
+          const now = Math.floor(Date.now() / 1000);
+
+          if (sub === "add") {
+            const channel = interaction.options.getChannel("channel", true);
+            if (!channel?.isTextBased?.()) {
+              await interaction.editReply("Target channel must be text-based.");
+              return;
+            }
+
+            const whenRaw = interaction.options.getString("when", true);
+            const sendAt = parseScheduleTimeToUnixSeconds(whenRaw);
+            if (!sendAt || sendAt <= now + 2) {
+              await interaction.editReply(
+                "Use a future time: ISO UTC, unix, `dd/hh/mm`, `hh/mm`, or token form like `1d2h30m`."
+              );
+              return;
+            }
+
+            const message = interaction.options.getString("message", true).trim().slice(0, 1800);
+            if (!message) {
+              await interaction.editReply("Reminder message cannot be empty.");
+              return;
+            }
+
+            const every = interaction.options.getInteger("every");
+            const intervalSeconds = parseReminderIntervalSeconds(
+              every,
+              interaction.options.getString("unit"),
+              new Set(["minutes", "hours", "days"])
+            );
+            if (intervalSeconds === -1) {
+              await interaction.editReply("Business reminders support minutes, hours, or days.");
+              return;
+            }
+            if (intervalSeconds > 0 && intervalSeconds < 60) {
+              await interaction.editReply("Minimum business reminder repeat interval is 1 minute.");
+              return;
+            }
+            if (intervalSeconds > 86400 * 30) {
+              await interaction.editReply("Maximum repeat interval is 30 days.");
+              return;
+            }
+
+            const result = db.prepare(`
+              INSERT INTO business_reminders (
+                guild_id, channel_id, message, send_at, interval_seconds, active, last_error, created_by, created_at, updated_at
+              )
+              VALUES (?, ?, ?, ?, ?, 1, '', ?, strftime('%s','now'), strftime('%s','now'))
+            `).run(interaction.guildId, channel.id, message, sendAt, intervalSeconds, interaction.user.id);
+
+            await interaction.editReply(
+              `Business reminder #${result.lastInsertRowid} created for <#${channel.id}>.\nWhen: <t:${sendAt}:F>\nRepeat: ${formatIntervalLabel(intervalSeconds)}`
+            );
+            return;
+          }
+
+          if (sub === "list") {
+            const rows = db.prepare(`
+              SELECT id, channel_id, message, send_at, interval_seconds, active, last_error
+              FROM business_reminders
+              WHERE guild_id = ? AND active = 1
+              ORDER BY send_at ASC
+              LIMIT 25
+            `).all(interaction.guildId);
+            if (!rows.length) {
+              await interaction.editReply("No business reminders found.");
+              return;
+            }
+            await interaction.editReply(
+              rows
+                .map(
+                  (r) =>
+                    `#${r.id} | <#${r.channel_id}> | <t:${r.send_at}:R> | ${formatIntervalLabel(
+                      r.interval_seconds
+                    )} | "${String(r.message || "").slice(0, 80)}"${
+                      r.last_error ? ` | err: ${r.last_error}` : ""
+                    }`
+                )
+                .join("\n")
+                .slice(0, 1900)
+            );
+            return;
+          }
+
+          if (sub === "remove") {
+            const id = interaction.options.getInteger("id", true);
+            const result = db.prepare(`
+              DELETE FROM business_reminders
+              WHERE id = ? AND guild_id = ?
+            `).run(id, interaction.guildId);
+            await interaction.editReply(
+              result.changes > 0
+                ? `Removed business reminder #${id}.`
+                : `No business reminder #${id} found.`
+            );
+            return;
+          }
+        }
+
         if (interaction.isRepliable()) {
           await interaction.reply({
             content: pausedMessage,
@@ -2222,6 +2455,380 @@ export function registerInteractionCreateHandler({
           ],
         });
         return;
+      }
+
+      if (interaction.commandName === "personal_reminder") {
+        await safeDefer(interaction, { ephemeral: true });
+        const sub = interaction.options.getSubcommand();
+        const now = Math.floor(Date.now() / 1000);
+
+        if (sub === "add") {
+          const whenRaw = interaction.options.getString("when", true);
+          const sendAt = parseScheduleTimeToUnixSeconds(whenRaw);
+          if (!sendAt || sendAt <= now + 2) {
+            await interaction.editReply({
+              embeds: [
+                statusEmbed({
+                  title: "Invalid Time",
+                  description:
+                    "Use a future time: ISO UTC, unix, `dd/hh/mm`, `hh/mm`, or token form like `1d2h30m`.",
+                  tone: "warn",
+                }),
+              ],
+            });
+            return;
+          }
+
+          const message = interaction.options.getString("message", true).trim().slice(0, 1800);
+          if (!message) {
+            await interaction.editReply({
+              embeds: [
+                statusEmbed({
+                  title: "Invalid Message",
+                  description: "Reminder message cannot be empty.",
+                  tone: "warn",
+                }),
+              ],
+            });
+            return;
+          }
+
+          const intervalSeconds = parseReminderIntervalSeconds(
+            interaction.options.getInteger("every"),
+            interaction.options.getString("unit"),
+            new Set(["seconds", "minutes", "hours", "days"])
+          );
+          if (intervalSeconds === -1) {
+            await interaction.editReply({
+              embeds: [
+                statusEmbed({
+                  title: "Invalid Repeat",
+                  description: "Invalid repeat unit.",
+                  tone: "warn",
+                }),
+              ],
+            });
+            return;
+          }
+          if (intervalSeconds > 0 && intervalSeconds < 5) {
+            await interaction.editReply({
+              embeds: [
+                statusEmbed({
+                  title: "Invalid Repeat",
+                  description: "Minimum repeat interval is 5 seconds.",
+                  tone: "warn",
+                }),
+              ],
+            });
+            return;
+          }
+          if (intervalSeconds > 86400 * 30) {
+            await interaction.editReply({
+              embeds: [
+                statusEmbed({
+                  title: "Invalid Repeat",
+                  description: "Maximum repeat interval is 30 days.",
+                  tone: "warn",
+                }),
+              ],
+            });
+            return;
+          }
+
+          const result = db.prepare(`
+            INSERT INTO user_reminders (
+              user_id, guild_id, message, send_at, interval_seconds, active, last_error, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, 1, '', strftime('%s','now'), strftime('%s','now'))
+          `).run(interaction.user.id, interaction.guildId || "0", message, sendAt, intervalSeconds);
+
+          await interaction.editReply({
+            embeds: [
+              statusEmbed({
+                title: `Personal Reminder Created (#${result.lastInsertRowid})`,
+                description: [
+                  `When: <t:${sendAt}:F>`,
+                  `Repeat: ${formatIntervalLabel(intervalSeconds)}`,
+                  "Delivery: DM",
+                ].join("\n"),
+                tone: "success",
+              }),
+            ],
+          });
+          return;
+        }
+
+        if (sub === "list") {
+          const rows = db.prepare(`
+            SELECT id, message, send_at, interval_seconds, active, last_error
+            FROM user_reminders
+            WHERE user_id = ? AND active = 1
+            ORDER BY send_at ASC
+            LIMIT 25
+          `).all(interaction.user.id);
+          if (!rows.length) {
+            await interaction.editReply({
+              embeds: [
+                statusEmbed({
+                  title: "Personal Reminders",
+                  description: "No personal reminders found.",
+                  tone: "info",
+                }),
+              ],
+            });
+            return;
+          }
+          await interaction.editReply({
+            embeds: [
+              statusEmbed({
+                title: "Personal Reminders",
+                description: rows
+                  .map(
+                    (r) =>
+                      `#${r.id} | <t:${r.send_at}:R> | ${formatIntervalLabel(
+                        r.interval_seconds
+                      )} | "${String(r.message || "").slice(0, 80)}"${
+                        r.last_error ? ` | err: ${r.last_error}` : ""
+                      }`
+                  )
+                  .join("\n")
+                  .slice(0, 3900),
+                tone: "info",
+              }),
+            ],
+          });
+          return;
+        }
+
+        if (sub === "remove") {
+          const id = interaction.options.getInteger("id", true);
+          const result = db.prepare(`
+            DELETE FROM user_reminders
+            WHERE id = ? AND user_id = ?
+          `).run(id, interaction.user.id);
+          await interaction.editReply({
+            embeds: [
+              statusEmbed({
+                title: result.changes > 0 ? "Personal Reminder Removed" : "Reminder Not Found",
+                description:
+                  result.changes > 0
+                    ? `Removed #${id}.`
+                    : `No personal reminder #${id} found.`,
+                tone: result.changes > 0 ? "success" : "warn",
+              }),
+            ],
+          });
+          return;
+        }
+      }
+
+      if (interaction.commandName === "business_reminder") {
+        if (!interaction.guildId) {
+          await interaction.reply({
+            embeds: [
+              statusEmbed({
+                title: "Business Reminder",
+                description: "This command only works in a server.",
+                tone: "warn",
+              }),
+            ],
+            ephemeral: true,
+          });
+          return;
+        }
+
+        const isOwner = interaction.user.id === OWNER_ID;
+        const isAdmin = Boolean(interaction.memberPermissions?.has("ManageGuild"));
+        if (!isOwner && !isAdmin) {
+          await interaction.reply({
+            embeds: [
+              statusEmbed({
+                title: "Permission Denied",
+                description: "Only admins (or Snooty) can manage business reminders.",
+                tone: "error",
+              }),
+            ],
+            ephemeral: true,
+          });
+          return;
+        }
+
+        await safeDefer(interaction, { ephemeral: true });
+        const sub = interaction.options.getSubcommand();
+        const now = Math.floor(Date.now() / 1000);
+
+        if (sub === "add") {
+          const channel = interaction.options.getChannel("channel", true);
+          if (!channel?.isTextBased?.()) {
+            await interaction.editReply({
+              embeds: [
+                statusEmbed({
+                  title: "Invalid Channel",
+                  description: "Target channel must be text-based.",
+                  tone: "warn",
+                }),
+              ],
+            });
+            return;
+          }
+
+          const whenRaw = interaction.options.getString("when", true);
+          const sendAt = parseScheduleTimeToUnixSeconds(whenRaw);
+          if (!sendAt || sendAt <= now + 2) {
+            await interaction.editReply({
+              embeds: [
+                statusEmbed({
+                  title: "Invalid Time",
+                  description:
+                    "Use a future time: ISO UTC, unix, `dd/hh/mm`, `hh/mm`, or token form like `1d2h30m`.",
+                  tone: "warn",
+                }),
+              ],
+            });
+            return;
+          }
+
+          const message = interaction.options.getString("message", true).trim().slice(0, 1800);
+          if (!message) {
+            await interaction.editReply({
+              embeds: [
+                statusEmbed({
+                  title: "Invalid Message",
+                  description: "Reminder message cannot be empty.",
+                  tone: "warn",
+                }),
+              ],
+            });
+            return;
+          }
+
+          const intervalSeconds = parseReminderIntervalSeconds(
+            interaction.options.getInteger("every"),
+            interaction.options.getString("unit"),
+            new Set(["minutes", "hours", "days"])
+          );
+          if (intervalSeconds === -1) {
+            await interaction.editReply({
+              embeds: [
+                statusEmbed({
+                  title: "Invalid Repeat",
+                  description: "Business reminders support minutes, hours, or days.",
+                  tone: "warn",
+                }),
+              ],
+            });
+            return;
+          }
+          if (intervalSeconds > 0 && intervalSeconds < 60) {
+            await interaction.editReply({
+              embeds: [
+                statusEmbed({
+                  title: "Invalid Repeat",
+                  description: "Minimum business reminder repeat interval is 1 minute.",
+                  tone: "warn",
+                }),
+              ],
+            });
+            return;
+          }
+          if (intervalSeconds > 86400 * 30) {
+            await interaction.editReply({
+              embeds: [
+                statusEmbed({
+                  title: "Invalid Repeat",
+                  description: "Maximum repeat interval is 30 days.",
+                  tone: "warn",
+                }),
+              ],
+            });
+            return;
+          }
+
+          const result = db.prepare(`
+            INSERT INTO business_reminders (
+              guild_id, channel_id, message, send_at, interval_seconds, active, last_error, created_by, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, 1, '', ?, strftime('%s','now'), strftime('%s','now'))
+          `).run(interaction.guildId, channel.id, message, sendAt, intervalSeconds, interaction.user.id);
+
+          await interaction.editReply({
+            embeds: [
+              statusEmbed({
+                title: `Business Reminder Created (#${result.lastInsertRowid})`,
+                description: [
+                  `Channel: <#${channel.id}>`,
+                  `When: <t:${sendAt}:F>`,
+                  `Repeat: ${formatIntervalLabel(intervalSeconds)}`,
+                ].join("\n"),
+                tone: "success",
+              }),
+            ],
+          });
+          return;
+        }
+
+        if (sub === "list") {
+          const rows = db.prepare(`
+            SELECT id, channel_id, message, send_at, interval_seconds, active, last_error
+            FROM business_reminders
+            WHERE guild_id = ? AND active = 1
+            ORDER BY send_at ASC
+            LIMIT 25
+          `).all(interaction.guildId);
+          if (!rows.length) {
+            await interaction.editReply({
+              embeds: [
+                statusEmbed({
+                  title: "Business Reminders",
+                  description: "No business reminders found.",
+                  tone: "info",
+                }),
+              ],
+            });
+            return;
+          }
+          await interaction.editReply({
+            embeds: [
+              statusEmbed({
+                title: "Business Reminders",
+                description: rows
+                  .map(
+                    (r) =>
+                      `#${r.id} | <#${r.channel_id}> | <t:${r.send_at}:R> | ${formatIntervalLabel(
+                        r.interval_seconds
+                      )} | "${String(r.message || "").slice(0, 80)}"${
+                        r.last_error ? ` | err: ${r.last_error}` : ""
+                      }`
+                  )
+                  .join("\n")
+                  .slice(0, 3900),
+                tone: "info",
+              }),
+            ],
+          });
+          return;
+        }
+
+        if (sub === "remove") {
+          const id = interaction.options.getInteger("id", true);
+          const result = db.prepare(`
+            DELETE FROM business_reminders
+            WHERE id = ? AND guild_id = ?
+          `).run(id, interaction.guildId);
+          await interaction.editReply({
+            embeds: [
+              statusEmbed({
+                title: result.changes > 0 ? "Business Reminder Removed" : "Reminder Not Found",
+                description:
+                  result.changes > 0
+                    ? `Removed #${id}.`
+                    : `No business reminder #${id} found.`,
+                tone: result.changes > 0 ? "success" : "warn",
+              }),
+            ],
+          });
+          return;
+        }
       }
 
       if (interaction.commandName === "serverconfig") {

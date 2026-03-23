@@ -9,6 +9,7 @@ export function createSchedulerService({
   let schedulerBusy = false;
   let autoPurgeBusy = false;
   let reminderBusy = false;
+  let businessReminderBusy = false;
   let messageTtlBusy = false;
 
   async function isMessageAuthorAdmin(msg, memberPermCache) {
@@ -322,6 +323,63 @@ export function createSchedulerService({
     }
   }
 
+  async function processDueBusinessReminders() {
+    if (businessReminderBusy) return;
+    businessReminderBusy = true;
+    try {
+      const now = Math.floor(Date.now() / 1000);
+      const due = db
+        .prepare(
+          `SELECT id, guild_id, channel_id, message, send_at, interval_seconds
+           FROM business_reminders
+           WHERE active = 1 AND send_at <= ?
+           ORDER BY send_at ASC
+           LIMIT 30`
+        )
+        .all(now);
+
+      for (const row of due) {
+        try {
+          const channel = await client.channels.fetch(row.channel_id).catch(() => null);
+          if (!channel?.isTextBased?.()) throw new Error("Channel unavailable.");
+
+          const content = String(row.message || "").trim().slice(0, 1800);
+          if (!content) throw new Error("Reminder message empty.");
+
+          await channel.send(`⏰ Business reminder\n${content}`);
+
+          const intervalSeconds = Math.max(0, Number(row.interval_seconds || 0));
+          if (intervalSeconds > 0) {
+            let next = Number(row.send_at) + intervalSeconds;
+            while (next <= now) next += intervalSeconds;
+            db.prepare(`
+              UPDATE business_reminders
+              SET send_at = ?, last_error = '', updated_at = strftime('%s','now')
+              WHERE id = ?
+            `).run(next, row.id);
+          } else {
+            db.prepare(`
+              UPDATE business_reminders
+              SET active = 0, last_error = '', updated_at = strftime('%s','now')
+              WHERE id = ?
+            `).run(row.id);
+          }
+        } catch (err) {
+          const errText = String(err?.message || err || "unknown error").slice(0, 240);
+          const retryAt = now + 300;
+          db.prepare(`
+            UPDATE business_reminders
+            SET send_at = ?, last_error = ?, updated_at = strftime('%s','now')
+            WHERE id = ?
+          `).run(retryAt, errText, row.id);
+          console.error(`Business reminder send failed #${row.id}:`, err);
+        }
+      }
+    } finally {
+      businessReminderBusy = false;
+    }
+  }
+
   async function processDueMessageTtlDeletes() {
     if (messageTtlBusy) return;
     messageTtlBusy = true;
@@ -378,6 +436,9 @@ export function createSchedulerService({
     processDueReminders().catch((e) =>
       console.error("Reminder startup tick failed:", e)
     );
+    processDueBusinessReminders().catch((e) =>
+      console.error("Business reminder startup tick failed:", e)
+    );
     processDueMessageTtlDeletes().catch((e) =>
       console.error("Message TTL startup tick failed:", e)
     );
@@ -390,6 +451,9 @@ export function createSchedulerService({
       );
       processDueReminders().catch((e) =>
         console.error("Reminder tick failed:", e)
+      );
+      processDueBusinessReminders().catch((e) =>
+        console.error("Business reminder tick failed:", e)
       );
       processDueMessageTtlDeletes().catch((e) =>
         console.error("Message TTL tick failed:", e)

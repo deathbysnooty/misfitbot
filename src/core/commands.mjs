@@ -25,6 +25,86 @@ export function getCommands({ ApplicationCommandType, featuresPaused = false }) 
         contexts: [0],
         dm_permission: false,
       },
+      {
+        name: "personal_reminder",
+        description: "Create and manage your personal DM reminders.",
+        options: [
+          {
+            type: 1,
+            name: "add",
+            description: "Create a personal reminder sent to your DMs.",
+            options: [
+              { type: 3, name: "when", description: "When to remind you", required: true },
+              { type: 3, name: "message", description: "Reminder text", required: true },
+              { type: 4, name: "every", description: "Repeat every N units", required: false },
+              {
+                type: 3,
+                name: "unit",
+                description: "Repeat unit",
+                required: false,
+                choices: [
+                  { name: "seconds", value: "seconds" },
+                  { name: "minutes", value: "minutes" },
+                  { name: "hours", value: "hours" },
+                  { name: "days", value: "days" },
+                ],
+              },
+            ],
+          },
+          { type: 1, name: "list", description: "List your active personal reminders." },
+          {
+            type: 1,
+            name: "remove",
+            description: "Remove one of your personal reminders.",
+            options: [
+              { type: 4, name: "id", description: "Reminder ID", required: true },
+            ],
+          },
+        ],
+        integration_types: [0, 1],
+        contexts: [0, 1, 2],
+        dm_permission: true,
+      },
+      {
+        name: "business_reminder",
+        description: "Admin only: create and manage channel reminders for the server.",
+        options: [
+          {
+            type: 1,
+            name: "add",
+            description: "Create a reminder that posts to a channel.",
+            options: [
+              { type: 7, name: "channel", description: "Target channel", required: true },
+              { type: 3, name: "when", description: "When to post it", required: true },
+              { type: 3, name: "message", description: "Reminder text", required: true },
+              { type: 4, name: "every", description: "Repeat every N units", required: false },
+              {
+                type: 3,
+                name: "unit",
+                description: "Repeat unit",
+                required: false,
+                choices: [
+                  { name: "minutes", value: "minutes" },
+                  { name: "hours", value: "hours" },
+                  { name: "days", value: "days" },
+                ],
+              },
+            ],
+          },
+          { type: 1, name: "list", description: "List active business reminders in this server." },
+          {
+            type: 1,
+            name: "remove",
+            description: "Remove a business reminder by ID.",
+            options: [
+              { type: 4, name: "id", description: "Reminder ID", required: true },
+            ],
+          },
+        ],
+        integration_types: [0],
+        contexts: [0],
+        dm_permission: false,
+      },
     ];
   }
 
@@ -39,6 +119,80 @@ export function getCommands({ ApplicationCommandType, featuresPaused = false }) 
       name: "daily_briefing_run",
       description: "Admin only: post the daily business briefing now.",
       options: [],
+    },
+    {
+      name: "personal_reminder",
+      description: "Create and manage your personal DM reminders.",
+      options: [
+        {
+          type: 1,
+          name: "add",
+          description: "Create a personal reminder sent to your DMs.",
+          options: [
+            { type: 3, name: "when", description: "When to remind you", required: true },
+            { type: 3, name: "message", description: "Reminder text", required: true },
+            { type: 4, name: "every", description: "Repeat every N units", required: false },
+            {
+              type: 3,
+              name: "unit",
+              description: "Repeat unit",
+              required: false,
+              choices: [
+                { name: "seconds", value: "seconds" },
+                { name: "minutes", value: "minutes" },
+                { name: "hours", value: "hours" },
+                { name: "days", value: "days" },
+              ],
+            },
+          ],
+        },
+        { type: 1, name: "list", description: "List your active personal reminders." },
+        {
+          type: 1,
+          name: "remove",
+          description: "Remove one of your personal reminders.",
+          options: [
+            { type: 4, name: "id", description: "Reminder ID", required: true },
+          ],
+        },
+      ],
+    },
+    {
+      name: "business_reminder",
+      description: "Admin only: create and manage channel reminders for the server.",
+      options: [
+        {
+          type: 1,
+          name: "add",
+          description: "Create a reminder that posts to a channel.",
+          options: [
+            { type: 7, name: "channel", description: "Target channel", required: true },
+            { type: 3, name: "when", description: "When to post it", required: true },
+            { type: 3, name: "message", description: "Reminder text", required: true },
+            { type: 4, name: "every", description: "Repeat every N units", required: false },
+            {
+              type: 3,
+              name: "unit",
+              description: "Repeat unit",
+              required: false,
+              choices: [
+                { name: "minutes", value: "minutes" },
+                { name: "hours", value: "hours" },
+                { name: "days", value: "days" },
+              ],
+            },
+          ],
+        },
+        { type: 1, name: "list", description: "List active business reminders in this server." },
+        {
+          type: 1,
+          name: "remove",
+          description: "Remove a business reminder by ID.",
+          options: [
+            { type: 4, name: "id", description: "Reminder ID", required: true },
+          ],
+        },
+      ],
     },
     {
       name: "ask",
@@ -1123,7 +1277,7 @@ export function getHelpText({ featuresPaused = false, pausedMessage = "" } = {})
         "MisfitBot is currently paused while it is being repurposed for business use.",
       "",
       "Legacy community commands are not active right now.",
-      "Available while paused: `/help`, `/setup_business_server`, `/daily_briefing_run`.",
+      "Available while paused: `/help`, `/setup_business_server`, `/daily_briefing_run`, `/personal_reminder`, `/business_reminder`.",
     ].join("\n");
   }
 

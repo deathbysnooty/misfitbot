@@ -118,6 +118,27 @@ export function createDb({ dbPath, defaultBotMode }) {
   `);
 
   db.exec(`
+    CREATE TABLE IF NOT EXISTS business_reminders (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      guild_id TEXT NOT NULL,
+      channel_id TEXT NOT NULL,
+      message TEXT NOT NULL DEFAULT '',
+      send_at INTEGER NOT NULL,
+      interval_seconds INTEGER NOT NULL DEFAULT 0,
+      active INTEGER NOT NULL DEFAULT 1,
+      last_error TEXT NOT NULL DEFAULT '',
+      created_by TEXT NOT NULL DEFAULT '',
+      created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+      updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+    );
+  `);
+
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_business_reminders_due
+    ON business_reminders (active, send_at);
+  `);
+
+  db.exec(`
     CREATE TABLE IF NOT EXISTS user_timezones (
       user_id TEXT PRIMARY KEY,
       tz TEXT NOT NULL,
