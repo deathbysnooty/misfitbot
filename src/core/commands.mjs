@@ -17,6 +17,14 @@ export function getCommands({ ApplicationCommandType, featuresPaused = false }) 
         contexts: [0],
         dm_permission: false,
       },
+      {
+        name: "daily_briefing_run",
+        description: "Admin only: post the daily business briefing now.",
+        options: [],
+        integration_types: [0],
+        contexts: [0],
+        dm_permission: false,
+      },
     ];
   }
 
@@ -25,6 +33,11 @@ export function getCommands({ ApplicationCommandType, featuresPaused = false }) 
     {
       name: "setup_business_server",
       description: "Admin only: create the standard business dashboard channels.",
+      options: [],
+    },
+    {
+      name: "daily_briefing_run",
+      description: "Admin only: post the daily business briefing now.",
       options: [],
     },
     {
@@ -1110,6 +1123,7 @@ export function getHelpText({ featuresPaused = false, pausedMessage = "" } = {})
         "MisfitBot is currently paused while it is being repurposed for business use.",
       "",
       "Legacy community commands are not active right now.",
+      "Available while paused: `/help`, `/setup_business_server`, `/daily_briefing_run`.",
     ].join("\n");
   }
 

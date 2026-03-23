@@ -57,6 +57,7 @@ export function registerInteractionCreateHandler({
   formatIntervalLabel,
   resolveTimeZoneInput,
   parseLocalHHMMToNextUnixSeconds,
+  runManualBriefing,
 }) {
   const EMBED_COLORS = {
     info: 0x5865f2,
@@ -1308,6 +1309,42 @@ export function registerInteractionCreateHandler({
           return;
         }
 
+        if (
+          interaction.isChatInputCommand() &&
+          interaction.commandName === "daily_briefing_run"
+        ) {
+          if (!interaction.guildId) {
+            await interaction.reply({
+              content: "This command only works in a server.",
+              ephemeral: true,
+            });
+            return;
+          }
+
+          const isOwner = interaction.user.id === OWNER_ID;
+          const isAdmin = Boolean(interaction.memberPermissions?.has("ManageGuild"));
+          if (!isOwner && !isAdmin) {
+            await interaction.reply({
+              content: "Only admins (or Snooty) can run the daily briefing manually.",
+              ephemeral: true,
+            });
+            return;
+          }
+
+          await safeDefer(interaction, { ephemeral: true });
+          const result = await runManualBriefing(interaction.guildId);
+          if (!result?.ok) {
+            await interaction.editReply(
+              result?.reason || "I couldn't post the daily briefing."
+            );
+            return;
+          }
+          await interaction.editReply(
+            `Daily briefing posted to <#${result.channelId}>.`
+          );
+          return;
+        }
+
         if (interaction.isRepliable()) {
           await interaction.reply({
             content: pausedMessage,
@@ -2122,6 +2159,64 @@ export function registerInteractionCreateHandler({
                   ? `Already existed: ${reused.map((ch) => `<#${ch.id}>`).join(", ")}`
                   : "Already existed: none",
               ].join("\n"),
+              tone: "success",
+            }),
+          ],
+        });
+        return;
+      }
+
+      if (interaction.commandName === "daily_briefing_run") {
+        if (!interaction.guildId) {
+          await interaction.reply({
+            embeds: [
+              statusEmbed({
+                title: "Daily Briefing",
+                description: "This command only works in a server.",
+                tone: "warn",
+              }),
+            ],
+            ephemeral: true,
+          });
+          return;
+        }
+
+        const isOwner = interaction.user.id === OWNER_ID;
+        const isAdmin = Boolean(interaction.memberPermissions?.has("ManageGuild"));
+        if (!isOwner && !isAdmin) {
+          await interaction.reply({
+            embeds: [
+              statusEmbed({
+                title: "Permission Denied",
+                description: "Only admins (or Snooty) can run the daily briefing manually.",
+                tone: "error",
+              }),
+            ],
+            ephemeral: true,
+          });
+          return;
+        }
+
+        await safeDefer(interaction, { ephemeral: true });
+        const result = await runManualBriefing(interaction.guildId);
+        if (!result?.ok) {
+          await interaction.editReply({
+            embeds: [
+              statusEmbed({
+                title: "Daily Briefing",
+                description: result?.reason || "I couldn't post the daily briefing.",
+                tone: "warn",
+              }),
+            ],
+          });
+          return;
+        }
+
+        await interaction.editReply({
+          embeds: [
+            statusEmbed({
+              title: "Daily Briefing Posted",
+              description: `Posted to <#${result.channelId}>.`,
               tone: "success",
             }),
           ],

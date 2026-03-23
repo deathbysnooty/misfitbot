@@ -49,6 +49,7 @@ import { createAiService } from "./src/services/ai.mjs";
 import { createSchedulerService } from "./src/services/scheduler.mjs";
 import { createTriviaService } from "./src/services/trivia.mjs";
 import { createDashboardService } from "./src/services/dashboard.mjs";
+import { createBusinessBriefingService } from "./src/services/businessBriefing.mjs";
 import { registerGuildMemberAddHandler } from "./src/handlers/guildMemberAdd.mjs";
 import { registerMessageCreateHandler } from "./src/handlers/messageCreate.mjs";
 import { registerInteractionCreateHandler } from "./src/handlers/interactionCreate.mjs";
@@ -121,6 +122,11 @@ const dashboard = createDashboardService({
   ownerId: OWNER_ID,
   clampPurgeScanLimit,
 });
+const businessBriefing = createBusinessBriefingService({
+  client,
+  db,
+  openai,
+});
 
 const commands = getCommands({ ApplicationCommandType, featuresPaused: FEATURES_PAUSED });
 const helpText = getHelpText({
@@ -133,6 +139,7 @@ client.once("ready", async () => {
   await registerCommands(client, commands);
   scheduler.startScheduler();
   dashboard.start();
+  businessBriefing.start();
 });
 
 registerGuildMemberAddHandler({
@@ -208,6 +215,7 @@ registerInteractionCreateHandler({
   formatIntervalLabel,
   resolveTimeZoneInput,
   parseLocalHHMMToNextUnixSeconds,
+  runManualBriefing: businessBriefing.runManualBriefing,
 });
 
 client.login(process.env.DISCORD_TOKEN);
