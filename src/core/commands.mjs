@@ -105,6 +105,36 @@ export function getCommands({ ApplicationCommandType, featuresPaused = false }) 
         contexts: [0],
         dm_permission: false,
       },
+      {
+        name: "idea",
+        description: "Save a business idea and expand it into a mini-plan.",
+        options: [
+          {
+            type: 3,
+            name: "text",
+            description: "Your rough idea",
+            required: true,
+          },
+        ],
+        integration_types: [0, 1],
+        contexts: [0, 1, 2],
+        dm_permission: true,
+      },
+      {
+        name: "ideas",
+        description: "Show the latest saved ideas.",
+        options: [
+          {
+            type: 4,
+            name: "limit",
+            description: "How many ideas to show",
+            required: false,
+          },
+        ],
+        integration_types: [0, 1],
+        contexts: [0, 1, 2],
+        dm_permission: true,
+      },
     ];
   }
 
@@ -191,6 +221,30 @@ export function getCommands({ ApplicationCommandType, featuresPaused = false }) 
           options: [
             { type: 4, name: "id", description: "Reminder ID", required: true },
           ],
+        },
+      ],
+    },
+    {
+      name: "idea",
+      description: "Save a business idea and expand it into a mini-plan.",
+      options: [
+        {
+          type: 3,
+          name: "text",
+          description: "Your rough idea",
+          required: true,
+        },
+      ],
+    },
+    {
+      name: "ideas",
+      description: "Show the latest saved ideas.",
+      options: [
+        {
+          type: 4,
+          name: "limit",
+          description: "How many ideas to show",
+          required: false,
         },
       ],
     },
@@ -1277,7 +1331,7 @@ export function getHelpText({ featuresPaused = false, pausedMessage = "" } = {})
         "MisfitBot is currently paused while it is being repurposed for business use.",
       "",
       "Legacy community commands are not active right now.",
-      "Available while paused: `/help`, `/setup_business_server`, `/daily_briefing_run`, `/personal_reminder`, `/business_reminder`.",
+      "Available while paused: `/help`, `/setup_business_server`, `/daily_briefing_run`, `/personal_reminder`, `/business_reminder`, `/idea`, `/ideas`.",
     ].join("\n");
   }
 

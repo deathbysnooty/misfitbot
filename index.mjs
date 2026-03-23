@@ -50,6 +50,7 @@ import { createSchedulerService } from "./src/services/scheduler.mjs";
 import { createTriviaService } from "./src/services/trivia.mjs";
 import { createDashboardService } from "./src/services/dashboard.mjs";
 import { createBusinessBriefingService } from "./src/services/businessBriefing.mjs";
+import { createIdeasService } from "./src/services/ideas.mjs";
 import { registerGuildMemberAddHandler } from "./src/handlers/guildMemberAdd.mjs";
 import { registerMessageCreateHandler } from "./src/handlers/messageCreate.mjs";
 import { registerInteractionCreateHandler } from "./src/handlers/interactionCreate.mjs";
@@ -127,6 +128,7 @@ const businessBriefing = createBusinessBriefingService({
   db,
   openai,
 });
+const ideas = createIdeasService({ openai });
 
 const commands = getCommands({ ApplicationCommandType, featuresPaused: FEATURES_PAUSED });
 const helpText = getHelpText({
@@ -216,6 +218,8 @@ registerInteractionCreateHandler({
   resolveTimeZoneInput,
   parseLocalHHMMToNextUnixSeconds,
   runManualBriefing: businessBriefing.runManualBriefing,
+  addIdea: ideas.addIdea,
+  listIdeas: ideas.listIdeas,
 });
 
 client.login(process.env.DISCORD_TOKEN);

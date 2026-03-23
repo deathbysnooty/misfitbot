@@ -58,6 +58,8 @@ export function registerInteractionCreateHandler({
   resolveTimeZoneInput,
   parseLocalHHMMToNextUnixSeconds,
   runManualBriefing,
+  addIdea,
+  listIdeas,
 }) {
   const EMBED_COLORS = {
     info: 0x5865f2,
@@ -195,6 +197,13 @@ export function registerInteractionCreateHandler({
     }
 
     return { created, reused };
+  }
+
+  async function findChannelByName(guild, targetName) {
+    await guild.channels.fetch().catch(() => null);
+    return [...guild.channels.cache.values()].find(
+      (ch) => Number(ch?.type) === 0 && String(ch.name || "").toLowerCase() === targetName
+    ) || null;
   }
 
   const MBTI_ANSWER_VALUES = {
@@ -1578,6 +1587,64 @@ export function registerInteractionCreateHandler({
           }
         }
 
+        if (interaction.isChatInputCommand() && interaction.commandName === "idea") {
+          await safeDefer(interaction, { ephemeral: true });
+          const text = interaction.options.getString("text", true).trim().slice(0, 800);
+          if (!text) {
+            await interaction.editReply("Idea text cannot be empty.");
+            return;
+          }
+
+          const entry = await addIdea(text);
+          if (interaction.guild) {
+            const channel = await findChannelByName(interaction.guild, "content-ideas");
+            if (channel?.isTextBased?.()) {
+              await channel.send({
+                embeds: [
+                  statusEmbed({
+                    title: `Idea #${entry.id}`,
+                    description: `**Idea**\n${entry.text}\n\n**Expanded plan**\n${entry.expanded}`.slice(
+                      0,
+                      3900
+                    ),
+                    tone: "info",
+                  }).setFooter({ text: entry.timestamp }).setTimestamp(new Date(entry.timestamp)),
+                ],
+              }).catch(() => null);
+            }
+          }
+
+          await interaction.editReply(`Idea #${entry.id} saved and expanded.`);
+          return;
+        }
+
+        if (interaction.isChatInputCommand() && interaction.commandName === "ideas") {
+          await safeDefer(interaction, { ephemeral: true });
+          const limit = interaction.options.getInteger("limit") ?? 10;
+          const items = await listIdeas(limit);
+          if (!items.length) {
+            await interaction.editReply("No ideas saved yet.");
+            return;
+          }
+
+          await interaction.editReply({
+            embeds: [
+              statusEmbed({
+                title: "Latest Ideas",
+                description: items
+                  .map(
+                    (item) =>
+                      `**#${item.id}** • ${item.timestamp}\n**Idea:** ${item.text}\n**Plan:** ${item.expanded}`
+                  )
+                  .join("\n\n")
+                  .slice(0, 3900),
+                tone: "info",
+              }),
+            ],
+          });
+          return;
+        }
+
         if (interaction.isRepliable()) {
           await interaction.reply({
             content: pausedMessage,
@@ -2829,6 +2896,88 @@ export function registerInteractionCreateHandler({
           });
           return;
         }
+      }
+
+      if (interaction.commandName === "idea") {
+        await safeDefer(interaction, { ephemeral: true });
+        const text = interaction.options.getString("text", true).trim().slice(0, 800);
+        if (!text) {
+          await interaction.editReply({
+            embeds: [
+              statusEmbed({
+                title: "Invalid Idea",
+                description: "Idea text cannot be empty.",
+                tone: "warn",
+              }),
+            ],
+          });
+          return;
+        }
+
+        const entry = await addIdea(text);
+        if (interaction.guild) {
+          const channel = await findChannelByName(interaction.guild, "content-ideas");
+          if (channel?.isTextBased?.()) {
+            await channel.send({
+              embeds: [
+                statusEmbed({
+                  title: `Idea #${entry.id}`,
+                  description: `**Idea**\n${entry.text}\n\n**Expanded plan**\n${entry.expanded}`.slice(
+                    0,
+                    3900
+                  ),
+                  tone: "info",
+                }).setFooter({ text: entry.timestamp }).setTimestamp(new Date(entry.timestamp)),
+              ],
+            }).catch(() => null);
+          }
+        }
+
+        await interaction.editReply({
+          embeds: [
+            statusEmbed({
+              title: `Idea Saved (#${entry.id})`,
+              description: entry.expanded,
+              tone: "success",
+            }).setFooter({ text: entry.timestamp }).setTimestamp(new Date(entry.timestamp)),
+          ],
+        });
+        return;
+      }
+
+      if (interaction.commandName === "ideas") {
+        await safeDefer(interaction, { ephemeral: true });
+        const limit = interaction.options.getInteger("limit") ?? 10;
+        const items = await listIdeas(limit);
+        if (!items.length) {
+          await interaction.editReply({
+            embeds: [
+              statusEmbed({
+                title: "Ideas",
+                description: "No ideas saved yet.",
+                tone: "info",
+              }),
+            ],
+          });
+          return;
+        }
+
+        await interaction.editReply({
+          embeds: [
+            statusEmbed({
+              title: "Latest Ideas",
+              description: items
+                .map(
+                  (item) =>
+                    `**#${item.id}** • ${item.timestamp}\n**Idea:** ${item.text}\n**Plan:** ${item.expanded}`
+                )
+                .join("\n\n")
+                .slice(0, 3900),
+              tone: "info",
+            }),
+          ],
+        });
+        return;
       }
 
       if (interaction.commandName === "serverconfig") {
