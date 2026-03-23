@@ -1,5 +1,6 @@
 export function registerGuildMemberAddHandler({
   client,
+  featuresPaused,
   getWelcomeConfig,
   WELCOME_CHANNEL_ID,
   WELCOME_MESSAGE,
@@ -7,8 +8,10 @@ export function registerGuildMemberAddHandler({
 }) {
   client.on("guildMemberAdd", async (member) => {
     try {
+      if (featuresPaused) return;
+
       const cfg = getWelcomeConfig(member.guild.id);
-      const selectedChannelId = cfg?.channel_id || WELCOME_CHANNEL_ID;
+      const selectedChannelId = cfg?.channel_id || "";
       const configuredChannel = selectedChannelId
         ? await member.guild.channels.fetch(selectedChannelId).catch(() => null)
         : null;

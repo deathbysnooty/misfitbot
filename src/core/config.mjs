@@ -22,6 +22,11 @@ export const MODE_PRESETS = {
 };
 
 export const DEFAULT_BOT_MODE = "sassy";
+export const FEATURES_PAUSED =
+  String(process.env.FEATURES_PAUSED || "true").toLowerCase() !== "false";
+export const PAUSED_MESSAGE =
+  process.env.PAUSED_MESSAGE ||
+  "MisfitBot is currently paused while it is being repurposed for business use. Legacy community features are still in the codebase, just not active right now.";
 
 export const DB_PATH = process.env.RENDER
   ? "/var/data/misfitbot.sqlite"

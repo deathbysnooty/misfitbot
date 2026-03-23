@@ -1,4 +1,17 @@
-export function getCommands({ ApplicationCommandType }) {
+export function getCommands({ ApplicationCommandType, featuresPaused = false }) {
+  if (featuresPaused) {
+    return [
+      {
+        name: "help",
+        description: "Show current bot status.",
+        options: [],
+        integration_types: [0, 1],
+        contexts: [0, 1, 2],
+        dm_permission: true,
+      },
+    ];
+  }
+
   const commands = [
     { name: "help", description: "Show what MisfitBot can do.", options: [] },
     {
@@ -888,6 +901,71 @@ export function getCommands({ ApplicationCommandType }) {
       ],
     },
     {
+      name: "serverconfig",
+      description: "Admin only: configure per-server quiz and MBTI settings.",
+      options: [
+        {
+          type: 1,
+          name: "show",
+          description: "Show this server's stored feature config.",
+        },
+        {
+          type: 1,
+          name: "set_quiz_channel",
+          description: "Set the quiz channel for this server.",
+          options: [
+            {
+              type: 7,
+              name: "channel",
+              description: "Quiz channel",
+              required: true,
+            },
+          ],
+        },
+        {
+          type: 1,
+          name: "set_quiz_leader_role",
+          description: "Set the quiz leader role for this server.",
+          options: [
+            {
+              type: 8,
+              name: "role",
+              description: "Role to award to the current quiz leader",
+              required: true,
+            },
+          ],
+        },
+        {
+          type: 1,
+          name: "set_mbti_channel",
+          description: "Set the MBTI channel for this server.",
+          options: [
+            {
+              type: 7,
+              name: "channel",
+              description: "MBTI channel",
+              required: true,
+            },
+          ],
+        },
+        {
+          type: 1,
+          name: "clear_quiz_channel",
+          description: "Clear the stored quiz channel for this server.",
+        },
+        {
+          type: 1,
+          name: "clear_quiz_leader_role",
+          description: "Clear the stored quiz leader role for this server.",
+        },
+        {
+          type: 1,
+          name: "clear_mbti_channel",
+          description: "Clear the stored MBTI channel for this server.",
+        },
+      ],
+    },
+    {
       name: "profile",
       description: "Manage your personal bot profile (opt-in).",
       options: [
@@ -1010,7 +1088,18 @@ export function getCommands({ ApplicationCommandType }) {
   });
 }
 
-export function getHelpText() {
+export function getHelpText({ featuresPaused = false, pausedMessage = "" } = {}) {
+  if (featuresPaused) {
+    return [
+      "**MisfitBot status**",
+      "",
+      pausedMessage ||
+        "MisfitBot is currently paused while it is being repurposed for business use.",
+      "",
+      "Legacy community commands are not active right now.",
+    ].join("\n");
+  }
+
   return [
     "**MisfitBot commands** 😌",
     "",

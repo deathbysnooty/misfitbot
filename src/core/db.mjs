@@ -36,6 +36,17 @@ export function createDb({ dbPath, defaultBotMode }) {
   `);
 
   db.exec(`
+    CREATE TABLE IF NOT EXISTS guild_feature_config (
+      guild_id TEXT PRIMARY KEY,
+      quiz_channel_id TEXT NOT NULL DEFAULT '',
+      quiz_leader_role_id TEXT NOT NULL DEFAULT '',
+      mbti_channel_id TEXT NOT NULL DEFAULT '',
+      updated_by TEXT NOT NULL DEFAULT '',
+      updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+    );
+  `);
+
+  db.exec(`
     CREATE TABLE IF NOT EXISTS bot_config (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL,
@@ -344,6 +355,67 @@ export function createDb({ dbPath, defaultBotMode }) {
     db.prepare(`DELETE FROM welcome_config WHERE guild_id = ?`).run(guildId);
   }
 
+  function getGuildFeatureConfig(guildId) {
+    return db
+      .prepare(
+        `SELECT guild_id, quiz_channel_id, quiz_leader_role_id, mbti_channel_id, updated_by, updated_at
+         FROM guild_feature_config
+         WHERE guild_id = ?`
+      )
+      .get(guildId);
+  }
+
+  function upsertGuildFeatureConfig(guildId, patch = {}, updatedBy = "") {
+    const current =
+      getGuildFeatureConfig(guildId) || {
+        quiz_channel_id: "",
+        quiz_leader_role_id: "",
+        mbti_channel_id: "",
+      };
+
+    db.prepare(`
+      INSERT INTO guild_feature_config (
+        guild_id, quiz_channel_id, quiz_leader_role_id, mbti_channel_id, updated_by, updated_at
+      )
+      VALUES (?, ?, ?, ?, ?, strftime('%s','now'))
+      ON CONFLICT(guild_id) DO UPDATE SET
+        quiz_channel_id = excluded.quiz_channel_id,
+        quiz_leader_role_id = excluded.quiz_leader_role_id,
+        mbti_channel_id = excluded.mbti_channel_id,
+        updated_by = excluded.updated_by,
+        updated_at = strftime('%s','now')
+    `).run(
+      guildId,
+      String(
+        patch.quiz_channel_id ?? current.quiz_channel_id ?? ""
+      ).trim(),
+      String(
+        patch.quiz_leader_role_id ?? current.quiz_leader_role_id ?? ""
+      ).trim(),
+      String(
+        patch.mbti_channel_id ?? current.mbti_channel_id ?? ""
+      ).trim(),
+      updatedBy
+    );
+  }
+
+  function clearGuildFeatureConfig(guildId, keys = []) {
+    const allowed = new Set([
+      "quiz_channel_id",
+      "quiz_leader_role_id",
+      "mbti_channel_id",
+    ]);
+    const requested = Array.isArray(keys) ? keys.filter((k) => allowed.has(k)) : [];
+    if (!requested.length) return;
+
+    const sets = requested.map((k) => `${k} = ''`).join(", ");
+    db.prepare(
+      `UPDATE guild_feature_config
+       SET ${sets}, updated_at = strftime('%s','now')
+       WHERE guild_id = ?`
+    ).run(guildId);
+  }
+
   function getBotMode(modePresets) {
     const row = db.prepare(`SELECT value FROM bot_config WHERE key = 'mode'`).get();
     const mode = String(row?.value || defaultBotMode).toLowerCase();
@@ -388,6 +460,9 @@ export function createDb({ dbPath, defaultBotMode }) {
     getWelcomeConfig,
     upsertWelcomeConfig,
     clearWelcomeConfig,
+    getGuildFeatureConfig,
+    upsertGuildFeatureConfig,
+    clearGuildFeatureConfig,
     getBotMode,
     setBotMode,
     getUserMemory,

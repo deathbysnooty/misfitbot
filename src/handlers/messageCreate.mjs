@@ -3,6 +3,8 @@ import { AttachmentBuilder } from "discord.js";
 export function registerMessageCreateHandler({
   client,
   OWNER_ID,
+  featuresPaused,
+  pausedMessage,
   db,
   setUserMemory,
   clearUserMemory,
@@ -48,6 +50,7 @@ export function registerMessageCreateHandler({
   client.on("messageCreate", async (message) => {
     try {
       if (message.author.bot) return;
+      if (featuresPaused) return;
 
       if (message.guildId) {
         const ttlRule = db

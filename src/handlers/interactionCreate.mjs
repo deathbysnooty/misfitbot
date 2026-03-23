@@ -19,6 +19,8 @@ export function registerInteractionCreateHandler({
   WELCOME_CHANNEL_ID,
   WELCOME_MESSAGE,
   MODE_PRESETS,
+  featuresPaused,
+  pausedMessage,
   getBotMode,
   setBotMode,
   getProfile,
@@ -28,6 +30,9 @@ export function registerInteractionCreateHandler({
   getWelcomeConfig,
   upsertWelcomeConfig,
   clearWelcomeConfig,
+  getGuildFeatureConfig,
+  upsertGuildFeatureConfig,
+  clearGuildFeatureConfig,
   getReplyContext,
   makeChatReply,
   transcribeAudioAttachment,
@@ -79,10 +84,11 @@ export function registerInteractionCreateHandler({
   const activeQuizSessions = new Map(); // guildId -> active quiz session
   const lastStartQuestionKeyByGuild = new Map(); // guildId -> last opening question key
   const quizLeaderRoleOwnerByGuild = new Map(); // guildId -> current leader user id
-  const QUIZ_CHANNEL_ID = String(process.env.QUIZ_CHANNEL_ID || "").trim();
-  const QUIZ_LEADER_ROLE_ID = String(process.env.QUIZ_LEADER_ROLE_ID || "")
+  const QUIZ_CHANNEL_ID_FALLBACK = String(process.env.QUIZ_CHANNEL_ID || "").trim();
+  const QUIZ_LEADER_ROLE_ID_FALLBACK = String(process.env.QUIZ_LEADER_ROLE_ID || "")
     .trim()
     .replace(/\D/g, "");
+  const MBTI_CHANNEL_ID_FALLBACK = String(process.env.MBTI_CHANNEL_ID || "").trim();
   const QUIZ_ACK_WINDOW_SECONDS = Math.max(
     5,
     Math.min(60, Number(process.env.QUIZ_ACK_WINDOW_SECONDS || 15) || 15)
@@ -104,6 +110,19 @@ export function registerInteractionCreateHandler({
     for (const [k, v] of map.entries()) {
       if (now - (v?.createdAt || 0) > maxAgeMs) map.delete(k);
     }
+  }
+
+  function getScopedGuildConfig(guildId) {
+    const cfg = guildId ? getGuildFeatureConfig?.(guildId) || {} : {};
+    return {
+      quizChannelId: String(cfg?.quiz_channel_id || QUIZ_CHANNEL_ID_FALLBACK || "").trim(),
+      quizLeaderRoleId: String(
+        cfg?.quiz_leader_role_id || QUIZ_LEADER_ROLE_ID_FALLBACK || ""
+      )
+        .trim()
+        .replace(/\D/g, ""),
+      mbtiChannelId: String(cfg?.mbti_channel_id || MBTI_CHANNEL_ID_FALLBACK || "").trim(),
+    };
   }
 
   function parseEmbedColor(input) {
@@ -430,7 +449,8 @@ export function registerInteractionCreateHandler({
   }
 
   async function syncQuizLeaderRole(guildId) {
-    if (!QUIZ_LEADER_ROLE_ID || !guildId) return;
+    const { quizLeaderRoleId } = getScopedGuildConfig(guildId);
+    if (!quizLeaderRoleId || !guildId) return;
 
     const top = db
       .prepare(
@@ -447,12 +467,14 @@ export function registerInteractionCreateHandler({
 
     const guild = client.guilds.cache.get(guildId) || (await client.guilds.fetch(guildId).catch(() => null));
     if (!guild) return;
-    const role = await guild.roles.fetch(QUIZ_LEADER_ROLE_ID).catch((err) => {
+    const role = await guild.roles.fetch(quizLeaderRoleId).catch((err) => {
       console.warn("Quiz leader role fetch failed:", err?.message || err);
       return null;
     });
     if (!role) {
-      console.warn(`Quiz leader role not found for guild ${guildId}. Check QUIZ_LEADER_ROLE_ID.`);
+      console.warn(
+        `Quiz leader role not found for guild ${guildId}. Check stored quiz leader role config.`
+      );
       return;
     }
 
@@ -1126,6 +1148,10 @@ export function registerInteractionCreateHandler({
   client.on("interactionCreate", async (interaction) => {
     try {
       if (interaction.isAutocomplete()) {
+        if (featuresPaused) {
+          await interaction.respond([]);
+          return;
+        }
         if (interaction.commandName !== "preset") return;
         if (!interaction.guildId) {
           await interaction.respond([]);
@@ -1170,6 +1196,30 @@ export function registerInteractionCreateHandler({
           return { name: title, value: title };
         });
         await interaction.respond(choices);
+        return;
+      }
+
+      if (featuresPaused) {
+        if (interaction.isChatInputCommand() && interaction.commandName === "help") {
+          const embed = statusEmbed({
+            title: "MisfitBot Status",
+            description: helpText,
+            tone: "info",
+          });
+          if (interaction.deferred || interaction.replied) {
+            await interaction.editReply({ embeds: [embed] });
+          } else {
+            await interaction.reply({ embeds: [embed], ephemeral: true });
+          }
+          return;
+        }
+
+        if (interaction.isRepliable()) {
+          await interaction.reply({
+            content: pausedMessage,
+            ephemeral: true,
+          }).catch(() => null);
+        }
         return;
       }
 
@@ -1914,6 +1964,164 @@ export function registerInteractionCreateHandler({
         return;
       }
 
+      if (interaction.commandName === "serverconfig") {
+        if (!interaction.guildId) {
+          await interaction.reply({
+            embeds: [
+              statusEmbed({
+                title: "Server Config",
+                description: "This command only works in a server.",
+                tone: "warn",
+              }),
+            ],
+            ephemeral: true,
+          });
+          return;
+        }
+
+        const isOwner = interaction.user.id === OWNER_ID;
+        const isAdmin = Boolean(interaction.memberPermissions?.has("ManageGuild"));
+        if (!isOwner && !isAdmin) {
+          await interaction.reply({
+            embeds: [
+              statusEmbed({
+                title: "Permission Denied",
+                description: "Only admins (or Snooty) can change server config.",
+                tone: "error",
+              }),
+            ],
+            ephemeral: true,
+          });
+          return;
+        }
+
+        const sub = interaction.options.getSubcommand();
+
+        if (sub === "show") {
+          const cfg = getScopedGuildConfig(interaction.guildId);
+          await interaction.reply({
+            embeds: [
+              statusEmbed({
+                title: "Server Config",
+                description: [
+                  `Quiz channel: ${cfg.quizChannelId ? `<#${cfg.quizChannelId}>` : "not set"}`,
+                  `Quiz leader role: ${cfg.quizLeaderRoleId ? `<@&${cfg.quizLeaderRoleId}>` : "not set"}`,
+                  `MBTI channel: ${cfg.mbtiChannelId ? `<#${cfg.mbtiChannelId}>` : "not set"}`,
+                ].join("\n"),
+                tone: "info",
+              }),
+            ],
+            ephemeral: true,
+          });
+          return;
+        }
+
+        if (sub === "set_quiz_channel") {
+          const channel = interaction.options.getChannel("channel", true);
+          upsertGuildFeatureConfig(
+            interaction.guildId,
+            { quiz_channel_id: channel.id },
+            interaction.user.id
+          );
+          await interaction.reply({
+            embeds: [
+              statusEmbed({
+                title: "Server Config Updated",
+                description: `Quiz channel set to <#${channel.id}>.`,
+                tone: "success",
+              }),
+            ],
+            ephemeral: true,
+          });
+          return;
+        }
+
+        if (sub === "set_quiz_leader_role") {
+          const role = interaction.options.getRole("role", true);
+          upsertGuildFeatureConfig(
+            interaction.guildId,
+            { quiz_leader_role_id: role.id },
+            interaction.user.id
+          );
+          await interaction.reply({
+            embeds: [
+              statusEmbed({
+                title: "Server Config Updated",
+                description: `Quiz leader role set to <@&${role.id}>.`,
+                tone: "success",
+              }),
+            ],
+            ephemeral: true,
+          });
+          return;
+        }
+
+        if (sub === "set_mbti_channel") {
+          const channel = interaction.options.getChannel("channel", true);
+          upsertGuildFeatureConfig(
+            interaction.guildId,
+            { mbti_channel_id: channel.id },
+            interaction.user.id
+          );
+          await interaction.reply({
+            embeds: [
+              statusEmbed({
+                title: "Server Config Updated",
+                description: `MBTI channel set to <#${channel.id}>.`,
+                tone: "success",
+              }),
+            ],
+            ephemeral: true,
+          });
+          return;
+        }
+
+        if (sub === "clear_quiz_channel") {
+          clearGuildFeatureConfig(interaction.guildId, ["quiz_channel_id"]);
+          await interaction.reply({
+            embeds: [
+              statusEmbed({
+                title: "Server Config Updated",
+                description: "Quiz channel cleared.",
+                tone: "success",
+              }),
+            ],
+            ephemeral: true,
+          });
+          return;
+        }
+
+        if (sub === "clear_quiz_leader_role") {
+          clearGuildFeatureConfig(interaction.guildId, ["quiz_leader_role_id"]);
+          await interaction.reply({
+            embeds: [
+              statusEmbed({
+                title: "Server Config Updated",
+                description: "Quiz leader role cleared.",
+                tone: "success",
+              }),
+            ],
+            ephemeral: true,
+          });
+          return;
+        }
+
+        if (sub === "clear_mbti_channel") {
+          clearGuildFeatureConfig(interaction.guildId, ["mbti_channel_id"]);
+          await interaction.reply({
+            embeds: [
+              statusEmbed({
+                title: "Server Config Updated",
+                description: "MBTI channel cleared.",
+                tone: "success",
+              }),
+            ],
+            ephemeral: true,
+          });
+          return;
+        }
+      }
+
       if (interaction.commandName === "quiz") {
         if (!interaction.guildId) {
           await interaction.reply({
@@ -2179,7 +2387,8 @@ export function registerInteractionCreateHandler({
             return;
           }
 
-          const channelId = QUIZ_CHANNEL_ID || interaction.channelId;
+          const { quizChannelId } = getScopedGuildConfig(interaction.guildId);
+          const channelId = quizChannelId || interaction.channelId;
           const lastStartKey =
             String(lastStartQuestionKeyByGuild.get(interaction.guildId) || "").trim();
           const seedRecent = lastStartKey ? [lastStartKey] : [];
@@ -2268,8 +2477,8 @@ export function registerInteractionCreateHandler({
                   "Answer type: word/short phrase",
                   `Next question delay: ${session.intervalSeconds}s`,
                   "Use `!hint` in quiz channel for hints",
-                  QUIZ_CHANNEL_ID && interaction.channelId !== channelId
-                    ? `Configured quiz channel override is active via \`QUIZ_CHANNEL_ID\`.`
+                  quizChannelId && interaction.channelId !== channelId
+                    ? "Configured quiz channel override is active for this server."
                     : "",
                 ]
                   .filter(Boolean)
@@ -2312,7 +2521,7 @@ export function registerInteractionCreateHandler({
         const sub = interaction.options.getSubcommand();
 
         if (sub === "start") {
-          const mbtiChannelId = process.env.MBTI_CHANNEL_ID || "";
+          const { mbtiChannelId } = getScopedGuildConfig(interaction.guildId);
           if (mbtiChannelId && interaction.channelId !== mbtiChannelId) {
             await interaction.reply({
               embeds: [

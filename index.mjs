@@ -8,6 +8,8 @@ import {
   WELCOME_MESSAGE,
   MODE_PRESETS,
   DEFAULT_BOT_MODE,
+  FEATURES_PAUSED,
+  PAUSED_MESSAGE,
   DB_PATH,
   FIXED_MEMORY,
   REPLY_CONTEXT_TTL_MS,
@@ -71,6 +73,9 @@ const {
   getWelcomeConfig,
   upsertWelcomeConfig,
   clearWelcomeConfig,
+  getGuildFeatureConfig,
+  upsertGuildFeatureConfig,
+  clearGuildFeatureConfig,
   getBotMode: getBotModeFromDb,
   setBotMode,
   getUserMemory,
@@ -117,8 +122,11 @@ const dashboard = createDashboardService({
   clampPurgeScanLimit,
 });
 
-const commands = getCommands({ ApplicationCommandType });
-const helpText = getHelpText();
+const commands = getCommands({ ApplicationCommandType, featuresPaused: FEATURES_PAUSED });
+const helpText = getHelpText({
+  featuresPaused: FEATURES_PAUSED,
+  pausedMessage: PAUSED_MESSAGE,
+});
 
 client.once("ready", async () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
@@ -129,6 +137,7 @@ client.once("ready", async () => {
 
 registerGuildMemberAddHandler({
   client,
+  featuresPaused: FEATURES_PAUSED,
   getWelcomeConfig,
   WELCOME_CHANNEL_ID,
   WELCOME_MESSAGE,
@@ -138,6 +147,8 @@ registerGuildMemberAddHandler({
 registerMessageCreateHandler({
   client,
   OWNER_ID,
+  featuresPaused: FEATURES_PAUSED,
+  pausedMessage: PAUSED_MESSAGE,
   db,
   setUserMemory,
   clearUserMemory,
@@ -159,6 +170,8 @@ registerInteractionCreateHandler({
   WELCOME_CHANNEL_ID,
   WELCOME_MESSAGE,
   MODE_PRESETS,
+  featuresPaused: FEATURES_PAUSED,
+  pausedMessage: PAUSED_MESSAGE,
   getBotMode,
   setBotMode,
   getProfile,
@@ -168,6 +181,9 @@ registerInteractionCreateHandler({
   getWelcomeConfig,
   upsertWelcomeConfig,
   clearWelcomeConfig,
+  getGuildFeatureConfig,
+  upsertGuildFeatureConfig,
+  clearGuildFeatureConfig,
   getReplyContext: replyContext.getReplyContext,
   makeChatReply: ai.makeChatReply,
   transcribeAudioAttachment: ai.transcribeAudioAttachment,
