@@ -144,6 +144,45 @@ export function registerInteractionCreateHandler({
     return normalizePresetTitle(input).toLowerCase();
   }
 
+  async function ensureBusinessChannels(guild) {
+    const desiredChannels = [
+      "daily-briefing",
+      "seo-reports",
+      "competitor-intel",
+      "content-ideas",
+      "blog-drafts",
+      "enquiry-summaries",
+      "lesson-plans",
+      "tasks",
+      "ops-notes",
+      "private-chat",
+    ];
+
+    await guild.channels.fetch().catch(() => null);
+    const existing = [...guild.channels.cache.values()];
+    const created = [];
+    const reused = [];
+
+    for (const name of desiredChannels) {
+      const match = existing.find(
+        (ch) => Number(ch?.type) === 0 && String(ch.name || "").toLowerCase() === name
+      );
+      if (match) {
+        reused.push(match);
+        continue;
+      }
+
+      const channel = await guild.channels.create({
+        name,
+        reason: "Business dashboard setup",
+      });
+      existing.push(channel);
+      created.push(channel);
+    }
+
+    return { created, reused };
+  }
+
   const MBTI_ANSWER_VALUES = {
     sd: -2,
     d: -1,
@@ -1214,6 +1253,61 @@ export function registerInteractionCreateHandler({
           return;
         }
 
+        if (
+          interaction.isChatInputCommand() &&
+          interaction.commandName === "setup_business_server"
+        ) {
+          if (!interaction.guildId || !interaction.guild) {
+            await interaction.reply({
+              content: "This command only works in a server.",
+              ephemeral: true,
+            });
+            return;
+          }
+
+          const isOwner = interaction.user.id === OWNER_ID;
+          const isAdmin = Boolean(interaction.memberPermissions?.has("ManageGuild"));
+          const canManageChannels = Boolean(
+            interaction.memberPermissions?.has("ManageChannels")
+          );
+          if (!isOwner && !isAdmin && !canManageChannels) {
+            await interaction.reply({
+              content: "You need channel management permissions to run this setup.",
+              ephemeral: true,
+            });
+            return;
+          }
+
+          await safeDefer(interaction, { ephemeral: true });
+          const me = interaction.guild.members.me
+            || (await interaction.guild.members.fetchMe().catch(() => null));
+          if (!me?.permissions?.has("ManageChannels")) {
+            await interaction.editReply(
+              "I need the `Manage Channels` permission before I can create the business channels."
+            );
+            return;
+          }
+
+          const { created, reused } = await ensureBusinessChannels(interaction.guild);
+          await interaction.editReply({
+            embeds: [
+              statusEmbed({
+                title: "Business Server Setup",
+                description: [
+                  created.length
+                    ? `Created: ${created.map((ch) => `<#${ch.id}>`).join(", ")}`
+                    : "Created: none",
+                  reused.length
+                    ? `Already existed: ${reused.map((ch) => `<#${ch.id}>`).join(", ")}`
+                    : "Already existed: none",
+                ].join("\n"),
+                tone: "success",
+              }),
+            ],
+          });
+          return;
+        }
+
         if (interaction.isRepliable()) {
           await interaction.reply({
             content: pausedMessage,
@@ -1961,6 +2055,77 @@ export function registerInteractionCreateHandler({
             ephemeral: true,
           });
         }
+        return;
+      }
+
+      if (interaction.commandName === "setup_business_server") {
+        if (!interaction.guildId || !interaction.guild) {
+          await interaction.reply({
+            embeds: [
+              statusEmbed({
+                title: "Business Setup",
+                description: "This command only works in a server.",
+                tone: "warn",
+              }),
+            ],
+            ephemeral: true,
+          });
+          return;
+        }
+
+        const isOwner = interaction.user.id === OWNER_ID;
+        const isAdmin = Boolean(interaction.memberPermissions?.has("ManageGuild"));
+        const canManageChannels = Boolean(
+          interaction.memberPermissions?.has("ManageChannels")
+        );
+        if (!isOwner && !isAdmin && !canManageChannels) {
+          await interaction.reply({
+            embeds: [
+              statusEmbed({
+                title: "Permission Denied",
+                description: "You need channel management permissions to run this setup.",
+                tone: "error",
+              }),
+            ],
+            ephemeral: true,
+          });
+          return;
+        }
+
+        await safeDefer(interaction, { ephemeral: true });
+        const me = interaction.guild.members.me
+          || (await interaction.guild.members.fetchMe().catch(() => null));
+        if (!me?.permissions?.has("ManageChannels")) {
+          await interaction.editReply({
+            embeds: [
+              statusEmbed({
+                title: "Missing Permission",
+                description:
+                  "I need the `Manage Channels` permission before I can create the standard business channels.",
+                tone: "warn",
+              }),
+            ],
+          });
+          return;
+        }
+
+        const { created, reused } = await ensureBusinessChannels(interaction.guild);
+        await interaction.editReply({
+          embeds: [
+            statusEmbed({
+              title: "Business Server Setup",
+              description: [
+                created.length
+                  ? `Created: ${created.map((ch) => `<#${ch.id}>`).join(", ")}`
+                  : "Created: none",
+                reused.length
+                  ? `Already existed: ${reused.map((ch) => `<#${ch.id}>`).join(", ")}`
+                  : "Already existed: none",
+              ].join("\n"),
+              tone: "success",
+            }),
+          ],
+        });
         return;
       }
 

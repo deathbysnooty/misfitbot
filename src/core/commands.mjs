@@ -9,11 +9,24 @@ export function getCommands({ ApplicationCommandType, featuresPaused = false }) 
         contexts: [0, 1, 2],
         dm_permission: true,
       },
+      {
+        name: "setup_business_server",
+        description: "Admin only: create the standard business dashboard channels.",
+        options: [],
+        integration_types: [0],
+        contexts: [0],
+        dm_permission: false,
+      },
     ];
   }
 
   const commands = [
     { name: "help", description: "Show what MisfitBot can do.", options: [] },
+    {
+      name: "setup_business_server",
+      description: "Admin only: create the standard business dashboard channels.",
+      options: [],
+    },
     {
       name: "ask",
       description: "Ask MisfitBot anything (reply context or message link).",
