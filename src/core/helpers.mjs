@@ -4,22 +4,39 @@ import crypto from "crypto";
 
 export function extractImageUrlsFromMessage(msg) {
   const urls = [];
-  if (!msg?.attachments) return urls;
 
-  for (const [, att] of msg.attachments) {
-    const ct = (att.contentType || "").toLowerCase();
-    const name = (att.name || "").toLowerCase();
-
-    const isImage =
-      ct.startsWith("image/") ||
-      name.endsWith(".png") ||
-      name.endsWith(".jpg") ||
-      name.endsWith(".jpeg") ||
-      name.endsWith(".webp") ||
-      name.endsWith(".gif");
-
-    if (isImage && att.url) urls.push(att.url);
+  function pushUrl(url) {
+    const clean = String(url || "").trim();
+    if (!clean) return;
+    if (!/^https?:\/\//i.test(clean)) return;
+    if (!urls.includes(clean)) urls.push(clean);
   }
+
+  if (msg?.attachments) {
+    for (const [, att] of msg.attachments) {
+      const ct = (att.contentType || "").toLowerCase();
+      const name = (att.name || "").toLowerCase();
+
+      const isImage =
+        ct.startsWith("image/") ||
+        name.endsWith(".png") ||
+        name.endsWith(".jpg") ||
+        name.endsWith(".jpeg") ||
+        name.endsWith(".webp") ||
+        name.endsWith(".gif");
+
+      if (isImage && att.url) pushUrl(att.url);
+      if (isImage && att.proxyURL) pushUrl(att.proxyURL);
+    }
+  }
+
+  for (const embed of msg?.embeds || []) {
+    pushUrl(embed?.image?.url);
+    pushUrl(embed?.thumbnail?.url);
+    pushUrl(embed?.video?.url);
+    pushUrl(embed?.url);
+  }
+
   return urls;
 }
 
